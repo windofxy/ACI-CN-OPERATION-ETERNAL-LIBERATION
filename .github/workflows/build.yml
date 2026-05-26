@@ -1,0 +1,395 @@
+# OEL CI. Modeled on rpcs3's own .github/workflows/rpcs3.yml so the build
+# environment matches what upstream tests against. The only OEL-specific
+# additions are:
+#   1. Clone rpcs3 + rpcn into SRC/GIT/ at the commits pinned by
+#      SRC/pinned-commits.env (the file SRC/clone-git-repos.sh already uses).
+#   2. Apply OEL's patches under SRC/PATCH/ before any build step runs.
+#   3. After rpcs3 is built (via upstream's .ci scripts), build rpcn, deploy
+#      both into BIN/_app/, and run OEL's package script to produce the
+#      installer + source/docker archives.
+#
+# Bump the version env block below when rpcs3 upstream bumps its own; the
+# Vulkan/ccache SHAs come straight from rpcs3's setup-windows.sh.
+
+name: Build
+
+on:
+  push:
+    branches: [main, experimental]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: write  # softprops/action-gh-release needs this for tag uploads
+
+env:
+  # Mirror of rpcs3's Windows_Build env. Bump together with upstream.
+  QT_VER:         '6.11.1'
+  QT_VER_MAIN:    '6'
+  QT_VER_MSVC:    'msvc2022'
+  QT_DATE:        '202605090529'
+  LLVM_VER:       '19.1.7'
+  VULKAN_VER:     '1.4.341.1'
+  VULKAN_SDK_SHA: 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
+  CCACHE_SHA:     '859141059ac950e1e8cd042c66f842f26b9e3a62a1669a69fe6ba180cb58bbdf'
+
+jobs:
+  Linux_Build:
+    name: OEL Linux (clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      # rpcs3's Linux job is dockerized; these env vars are read by its
+      # .ci/build-linux.sh and .ci/deploy-linux.sh inside the container.
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      DEPLOY_APPIMAGE: 'true'
+      APPDIR:  /rpcs3/build/appdir
+      ARTDIR:  /rpcs3-artifacts
+      RELEASE_MESSAGE: /rpcs3/GitHubReleaseMessage.txt
+      COMPILER: clang
+      RUN_UNIT_TESTS: 'OFF'
+      BUILD_REPOSITORY_NAME:  ${{ github.repository }}
+      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER:        ${{ github.event.pull_request.number }}
+      BUILD_SOURCEVERSION:    ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts
+    steps:
+      - name: Checkout OEL
+        uses: actions/checkout@v4
+
+      # SRC/pinned-commits.env holds the rpcs3 / rpcn commit hashes we build
+      # against. Exporting them here keeps later steps free of duplication.
+      - name: Load pinned upstream commits
+        run: |
+          set -a; source SRC/pinned-commits.env; set +a
+          for v in RPCS3_URL RPCS3_COMMIT RPCN_URL RPCN_COMMIT; do
+            echo "$v=${!v}" >> "$GITHUB_ENV"
+          done
+
+      # Stamp OEL.iss + launcher.py with either the tag (release builds) or
+      # AppVersion-<short-sha> (commit builds). package.sh reads AppVersion
+      # back out of OEL.iss so all downstream artifact names follow.
+      - name: Stamp build version
+        run: bash ci/stamp-version.sh
+
+      # Clone upstream sources and apply OEL's patches. Submodules are NOT
+      # recursed here; rpcs3's own build-linux.sh inits the submodules it
+      # actually needs (skipping llvm/opencv/sdl/curl/zlib, which the
+      # rpcs3-ci-jammy image provides). The patches only touch tracked files
+      # in the rpcs3/ and rpcn/ source trees, never submodule contents.
+      - name: Clone & patch upstream
+        run: |
+          git clone "$RPCS3_URL" SRC/GIT/rpcs3
+          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" )
+          git clone "$RPCN_URL" SRC/GIT/rpcn
+          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
+
+      # Keyed on rpcs3 commit so a pin bump invalidates the cache cleanly.
+      # github.run_id makes the primary key unique per run; restore-keys do the
+      # actual hit. Save step at end commits a fresh cache for next time.
+      - name: Restore rpcs3 ccache
+        uses: actions/cache/restore@v4
+        id: restore-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ env.RPCS3_COMMIT }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ env.RPCS3_COMMIT }}-
+            ${{ runner.os }}-ccache-${{ env.COMPILER }}-
+
+      # Same image and entry point rpcs3 upstream uses for its Linux CI.
+      # The container has Qt 6, LLVM 19, Vulkan, ffmpeg, etc. preinstalled.
+      - name: Build rpcs3 in upstream's CI container
+        run: |
+          DOCKER_IMG="rpcs3/rpcs3-ci-jammy:1.13"
+          docker pull --quiet "$DOCKER_IMG"
+          mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/SRC/GIT/rpcs3:/rpcs3" \
+            -v "$CCACHE_DIR:/root/.ccache" \
+            -v "$BUILD_ARTIFACTSTAGINGDIRECTORY:$ARTDIR" \
+            -e APPDIR -e ARTDIR -e RELEASE_MESSAGE \
+            -e COMPILER -e DEPLOY_APPIMAGE -e RUN_UNIT_TESTS \
+            -e BUILD_REPOSITORY_NAME -e BUILD_SOURCEBRANCHNAME \
+            -e BUILD_PR_NUMBER -e BUILD_SOURCEVERSION \
+            -e BUILD_ARTIFACTSTAGINGDIRECTORY="$ARTDIR" \
+            "$DOCKER_IMG" \
+            /rpcs3/.ci/build-linux.sh
+
+      # AppImage comes out root-owned because the container runs as root.
+      - name: Reclaim artifacts ownership
+        run: sudo chown -R "$(id -u):$(id -g)" "$BUILD_ARTIFACTSTAGINGDIRECTORY"
+
+      - name: Install protoc (needed by rpcn's prost_build)
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '28.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache rpcn cargo state
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: SRC/GIT/rpcn
+
+      - name: Build rpcn
+        run: ( cd SRC/GIT/rpcn && cargo build --release )
+
+      # OEL's package.sh produces the SRC + DOCKER tar.xz archives.
+      # On Linux we don't build an installer (no Inno Setup); the AppImage
+      # produced above by upstream's deploy-linux.sh is uploaded alongside.
+      - name: Build OEL release archives
+        run: bash package.sh
+
+      - name: Save rpcs3 ccache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OEL Linux
+          path: |
+            ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}/*.AppImage
+            OEL-SRC-*.tar.xz
+            OEL-DOCKER-*.tar.xz
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}/*.AppImage
+            OEL-SRC-*.tar.xz
+            OEL-DOCKER-*.tar.xz
+
+  Windows_Build:
+    name: OEL Windows (MSVC)
+    # Match rpcs3 upstream. windows-latest will move to VS 2026 in mid-June 2026
+    # but pinning explicitly keeps us in sync with rpcs3's runs-on regardless.
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash   # rpcs3's .ci scripts are POSIX sh; bash is the right default
+    env:
+      COMPILER:           msvc
+      CCACHE_BIN_DIR:     'C:\ccache_bin'
+      CCACHE_DIR:         'C:\ccache'
+      CCACHE_INODECACHE:  'true'
+      CCACHE_SLOPPINESS:  'time_macros'
+      DEPS_CACHE_DIR:     ./dependency_cache
+      BUILD_REPOSITORY_NAME:  ${{ github.repository }}
+      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER:        ${{ github.event.pull_request.number }}
+      BUILD_SOURCEVERSION:    ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts
+    steps:
+      - name: Checkout OEL
+        uses: actions/checkout@v4
+
+      - name: Load pinned upstream commits
+        run: |
+          set -a; source SRC/pinned-commits.env; set +a
+          for v in RPCS3_URL RPCS3_COMMIT RPCN_URL RPCN_COMMIT; do
+            echo "$v=${!v}" >> "$GITHUB_ENV"
+          done
+
+      # Stamp OEL.iss + launcher.py with either the tag (release builds) or
+      # AppVersion-<short-sha> (commit builds). package.bat reads AppVersion
+      # back out of OEL.iss so all downstream artifact names follow.
+      - name: Stamp build version
+        run: bash ci/stamp-version.sh
+
+      # Same selective-submodule rationale as the Linux job: rpcs3's
+      # setup-windows.sh inits only the submodules it needs.
+      - name: Clone & patch upstream
+        run: |
+          git clone "$RPCS3_URL" SRC/GIT/rpcs3
+          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" )
+          git clone "$RPCN_URL" SRC/GIT/rpcn
+          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v4
+
+      - name: Restore NuGet packages
+        working-directory: SRC/GIT/rpcs3
+        shell: pwsh
+        run: nuget restore rpcs3.sln
+
+      - name: Export QTDIR + VULKAN_SDK
+        shell: pwsh
+        run: |
+          echo "QTDIR=C:\Qt\${{ env.QT_VER }}\${{ env.QT_VER_MSVC }}_64" >> $env:GITHUB_ENV
+          echo "VULKAN_SDK=C:\VulkanSDK\${{ env.VULKAN_VER }}" >> $env:GITHUB_ENV
+
+      # rpcs3 writes the LLVM checksum to llvm.lock; hashFiles picks it up in
+      # the deps cache key below so an upstream LLVM bump cleanly busts cache.
+      - name: Get cache keys
+        working-directory: SRC/GIT/rpcs3
+        run: ./.ci/get_keys-windows.sh
+
+      - name: Restore rpcs3 ccache
+        uses: actions/cache/restore@v4
+        id: restore-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: "${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ env.RPCS3_COMMIT }}-${{ github.run_id }}"
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ env.RPCS3_COMMIT }}-
+            ${{ runner.os }}-ccache-${{ env.COMPILER }}-
+
+      # Caches downloaded Qt / Vulkan / LLVM / ccache zips (~1 GB) under
+      # SRC/GIT/rpcs3/dependency_cache so setup-windows.sh can skip re-download.
+      - name: Restore dependencies cache
+        uses: actions/cache/restore@v4
+        id: restore-deps
+        with:
+          path: SRC/GIT/rpcs3/${{ env.DEPS_CACHE_DIR }}
+          key: "${{ runner.os }}-${{ env.COMPILER }}-${{ env.QT_VER }}-${{ env.VULKAN_SDK_SHA }}-${{ env.CCACHE_SHA }}-${{ hashFiles('SRC/GIT/rpcs3/llvm.lock') }}"
+          restore-keys: ${{ runner.os }}-${{ env.COMPILER }}-
+
+      - name: Download & unpack rpcs3 dependencies
+        working-directory: SRC/GIT/rpcs3
+        run: |
+          ./.ci/setup-windows.sh
+          ./.ci/setup-windows-ci-vars.sh win64 msvc
+
+      # BRANCH/BUILD/AVVER are written to .ci/ci-vars.env by the script above.
+      - name: Import rpcs3 ci-vars into the job env
+        working-directory: SRC/GIT/rpcs3
+        run: |
+          while IFS='=' read -r key val; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            echo "$key=$val" >> "$GITHUB_ENV"
+          done < .ci/ci-vars.env
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # Same msbuild invocation rpcs3 upstream uses, including the ccache-as-cl
+      # interception and the ci_only.targets shim.
+      - name: Compile rpcs3
+        working-directory: SRC/GIT/rpcs3
+        shell: pwsh
+        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\SRC\GIT\rpcs3\buildfiles\msvc\ci_only.targets"
+
+      - name: Pack up rpcs3 artifacts (upstream's deploy-windows.sh)
+        working-directory: SRC/GIT/rpcs3
+        run: |
+          mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY"
+          ./.ci/deploy-windows.sh
+
+      # ---- OEL-specific tail ----------------------------------------------
+
+      - name: Install Inno Setup 6 (for package.bat)
+        shell: pwsh
+        # Chocolatey is pre-installed; this drops ISCC.exe at the path
+        # package.bat probes first.
+        run: choco install innosetup --no-progress --confirm
+
+      - name: Cache rpcn cargo state
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: SRC/GIT/rpcn
+
+      - name: Install protoc (needed by rpcn's prost_build)
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '28.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build rpcn
+        shell: pwsh
+        working-directory: SRC/GIT/rpcn
+        run: |
+          # openssl-src (vendored OpenSSL) shells out to Perl. Strawberry Perl
+          # is pre-installed on this image; force it ahead of Git-bundled MSYS2
+          # perl, which lacks the core modules openssl-src expects.
+          $env:Path = 'C:\Strawberry\perl\bin;' + $env:Path
+          cargo build --release
+
+      # Mirrors the "Deploy artifacts" step in ci/build-all.ps1. Emulator's
+      # bin/ tree is laid out under BIN\_app\RPCS3 with GuiConfigs/Icons routed
+      # into portable\ (where RPCS3 looks for them in portable mode).
+      - name: Stage rpcs3 + rpcn into BIN/_app
+        shell: pwsh
+        run: |
+          $rpcs3BuildOut = 'SRC\GIT\rpcs3\bin'
+          $rpcs3Deploy   = 'BIN\_app\RPCS3'
+          $rpcnBin       = 'SRC\GIT\rpcn\target\release\rpcn.exe'
+          $rpcnDeploy    = 'BIN\_app\rpcn'
+
+          # robocopy exit codes 0-7 are success-with-warnings.
+          robocopy $rpcs3BuildOut $rpcs3Deploy /MIR `
+            /XD GuiConfigs Icons portable `
+            /XF clear_tus_save.bat clear_tus_save.ps1 restore_tus_save.bat restore_tus_save.ps1 `
+            /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy main failed: $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+
+          foreach ($sub in 'GuiConfigs', 'Icons') {
+            $src = Join-Path $rpcs3BuildOut $sub
+            if (Test-Path $src) {
+              robocopy $src "$rpcs3Deploy\portable\$sub" /E /NFL /NDL /NJH /NJS /NP
+              if ($LASTEXITCODE -ge 8) { throw "robocopy $sub failed: $LASTEXITCODE" }
+              $global:LASTEXITCODE = 0
+            }
+          }
+
+          Copy-Item -Force $rpcnBin "$rpcnDeploy\rpcn.exe"
+
+      # `< nul` lets the trailing `pause` in package.bat return without a TTY.
+      - name: Build OEL installer + archives
+        shell: cmd
+        run: package.bat < nul
+
+      - name: Save rpcs3 ccache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
+
+      - name: Save dependencies cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: SRC/GIT/rpcs3/${{ env.DEPS_CACHE_DIR }}
+          key: ${{ steps.restore-deps.outputs.cache-primary-key }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OEL Windows
+          path: |
+            OP-ETERNAL-Setup-*.exe
+            OEL-SRC-*.7z
+            OEL-DOCKER-*.7z
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            OP-ETERNAL-Setup-*.exe
+            OEL-SRC-*.7z
+            OEL-DOCKER-*.7z
