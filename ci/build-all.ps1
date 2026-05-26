@@ -153,10 +153,13 @@ New-Item -ItemType Directory -Force -Path $RpcnDeployDir  | Out-Null
 
 # Main mirror: bin/ -> BIN\_app\RPCS3\, excluding subdirs handled separately
 # (GuiConfigs and Icons go under portable\) and preserving the helper scripts
-# at the root. Exit codes 0-7 are success-with-warnings for robocopy.
+# at the root. The rpcs3.exp / .lib / .pdb / vc_redist.x64.exe files are
+# stripped to match what rpcs3's own .ci/deploy-windows.sh removes before
+# distribution. Exit codes 0-7 are success-with-warnings for robocopy.
 robocopy $Rpcs3BuildOut $Rpcs3DeployDir /MIR `
     /XD GuiConfigs Icons portable `
     /XF clear_tus_save.bat clear_tus_save.ps1 restore_tus_save.bat restore_tus_save.ps1 `
+        rpcs3.exp rpcs3.lib rpcs3.pdb vc_redist.x64.exe `
     /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy main failed with exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
