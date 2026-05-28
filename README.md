@@ -146,6 +146,19 @@ Run `package.bat` to produce:
 
 All versioned from `AppVersion` in `OEL.iss`. `OEL-DOCKER` is a source bundle for Linux self-hosters; they extract it, `cd BIN`, and run `docker compose up -d --build`.
 
+## Licensing
+
+Original code by The -OPERATIONS- Team is licensed under [AGPL-3.0-or-later](LICENSE), with an additional permission to combine it with RPCS3 and convey the combined work under GPL-2.0. Upstream RPCS3 and RPCN sources, and our patches to them, follow their respective upstream licenses (GPL-2.0-only and AGPL-3.0-or-later). See [LICENSING.md](LICENSING.md) for the per-directory breakdown.
+
+## Credits
+
+A collaborative effort by **The -OPERATIONS- Team**:
+
+- [Killer0byte](https://github.com/Killer0byte)
+- [Optimus1200](https://github.com/Optimus1200)
+- JumpSuit
+- Volcano Water
+
 ## Legal Disclaimer
 
 **OPERATION ETERNAL LIBERATION** is an independent, community-driven revival project and is **not** affiliated with, endorsed by, or otherwise connected to Bandai Namco Entertainment Inc. or any of the original rights holders of *Ace Combat Infinity*.
