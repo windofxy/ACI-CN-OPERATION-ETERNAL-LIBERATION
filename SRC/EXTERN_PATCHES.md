@@ -1,10 +1,11 @@
 # External patches
 
-This project carries three patches against upstream source trees, applied by
+This project carries four patches against upstream source trees, applied by
 `SRC\apply-patches.bat`:
 
 - `SRC\PATCH\RPCS3\tss-support.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
 - `SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
+- `SRC\PATCH\RPCS3\tree-transparency.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
 - `SRC\PATCH\RPCN\tss-server.patch` against [rpcn](https://github.com/RipleyTom/rpcn)
 
 The kit modifies upstream because the game depends on
@@ -179,6 +180,16 @@ RFC 6298 `RTTVAR` update (`RTTVAR = 3/4 RTTVAR + 1/4 |SRTT - R|`, then
 Additional `sys_net.trace` lines in `sys_net.cpp`, `sys_net_helpers.cpp`, and
 `lv2_socket_p2ps.cpp`. Gated behind the emulator's per-channel log level;
 emitted only when `sys_net` is set to `Trace` in `Logger`.
+
+## RPCS3: `tree-transparency.patch`
+
+Modifies `rpcs3/Emu/RSX/RSXThread.cpp`.
+
+Moves the `RSX_SHADER_CONTROL_ALPHA_TEST` assignment out of the
+polygon-class branch of `prepare_fragment_program` so it also applies to
+non-polygon primitive classes. Intended to address opaque-black backgrounds
+on point-sprite foliage in this game. Not confirmed to be the right fix in
+general; included as a workaround pending a proper investigation upstream.
 
 ## rpcn: `tss-server.patch`
 

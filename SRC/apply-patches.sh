@@ -21,9 +21,10 @@ step() {
     echo
 }
 
-step "1/3" rpcs3 "RPCS3/tss-support.patch"       "RPCS3 TSS patch"
-step "2/3" rpcs3 "RPCS3/p2ps-disconnect-fix.patch" "RPCS3 P2PS disconnect fix patch"
-step "3/3" rpcn  "RPCN/tss-server.patch"          "RPCN TSS server patch"
+step "1/4" rpcs3 "RPCS3/tss-support.patch"       "RPCS3 TSS patch"
+step "2/4" rpcs3 "RPCS3/p2ps-disconnect-fix.patch" "RPCS3 P2PS disconnect fix patch"
+step "3/4" rpcs3 "RPCS3/tree-transparency.patch"   "RPCS3 tree transparency patch"
+step "4/4" rpcn  "RPCN/tss-server.patch"          "RPCN TSS server patch"
 
 cat <<'EOF'
 ============================================================
