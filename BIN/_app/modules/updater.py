@@ -13,13 +13,14 @@ def _parse_version(tag: str) -> tuple[int, ...] | None:
     """Return a comparable version tuple from a tag, or None if unparseable.
 
     Handles plain releases ("1.0.2.3") and suffixed experimental builds
-    ("1.0.2.3-experimental-1").  The trailing integer in the suffix becomes
-    the last tuple element, so experimental builds sort above the bare
-    release at the same base version:
-        1.0.2.3            -> (1, 0, 2, 3, 0)
-        1.0.2.3-experimental-1 -> (1, 0, 2, 3, 1)
-        1.0.2.3-experimental-2 -> (1, 0, 2, 3, 2)
-        1.0.2.4            -> (1, 0, 2, 4, 0)
+    ("1.0.2.3-experimental-1").  The base is padded to a fixed width so the
+    trailing seq never collides with a real version component; a bare
+    release sorts above all experimental builds at the same base:
+        1.0.2-experimental-1   -> (1, 0, 2, 0,    1)
+        1.0.2                  -> (1, 0, 2, 0, 9999)
+        1.0.2.3-experimental-1 -> (1, 0, 2, 3,    1)
+        1.0.2.3                -> (1, 0, 2, 3, 9999)
+        1.0.2.4-experimental-1 -> (1, 0, 2, 4,    1)
     """
     import re
     tag = tag.lstrip("v").strip()
@@ -28,7 +29,8 @@ def _parse_version(tag: str) -> tuple[int, ...] | None:
         parts = tuple(int(p) for p in base.split("."))
     except ValueError:
         return None
-    seq = 0
+    parts = (parts + (0, 0, 0, 0))[:4]  # fixed width; seq must not collide with a component
+    seq = 9999  # bare release is final; experimental builds sort below it
     if suffix:
         m = re.search(r"(\d+)$", suffix)
         seq = int(m.group(1)) if m else 1

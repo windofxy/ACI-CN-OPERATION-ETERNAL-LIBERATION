@@ -68,7 +68,7 @@ fi
 
 # In-place stamp. Anchors on unique prefixes so this is idempotent.
 sed -i.bak -E "s/^(#define AppVersion ).*/\\1\"${VERSION}\"/" "$ISS"
-sed -i.bak -E "s/^VERSION = \".*\"/VERSION = \"${VERSION}\"/" "$LAUNCHER"
+sed -i.bak -E "s/^(VERSION[[:space:]]*)= \"[^\"]*\"/\1= \"${VERSION}\"/" "$LAUNCHER"
 rm -f "$ISS.bak" "$LAUNCHER.bak"
 
 echo "Stamped build version: $VERSION"
