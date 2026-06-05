@@ -40,14 +40,16 @@ SHORT_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown"
 
 if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
     TAG="${GITHUB_REF#refs/tags/}"
-    if [ "$TAG" != "$APP_VER" ]; then
+    if [ "$TAG" != "$APP_VER" ] && [[ "$TAG" != "${APP_VER}-"* ]]; then
         cat >&2 <<EOF
 ERROR: release tag "$TAG" does not match AppVersion "$APP_VER" in OEL.iss.
+The tag must equal AppVersion exactly (e.g. "$APP_VER") or start with
+"$APP_VER-" for an experimental build (e.g. "${APP_VER}-experimental-1").
 Bump the AppVersion (and re-commit) before pushing the release tag.
 EOF
         exit 1
     fi
-    VERSION="$APP_VER"
+    VERSION="$TAG"
 else
     # Branch name. Prefer GITHUB_HEAD_REF (PR source branch), then
     # GITHUB_REF_NAME (push / workflow_dispatch), then git directly (local).

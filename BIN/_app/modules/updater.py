@@ -10,12 +10,29 @@ _TIMEOUT = 10
 
 
 def _parse_version(tag: str) -> tuple[int, ...] | None:
-    """Return a comparable version tuple from a tag like 'v1.0.2.3', or None."""
+    """Return a comparable version tuple from a tag, or None if unparseable.
+
+    Handles plain releases ("1.0.2.3") and suffixed experimental builds
+    ("1.0.2.3-experimental-1").  The trailing integer in the suffix becomes
+    the last tuple element, so experimental builds sort above the bare
+    release at the same base version:
+        1.0.2.3            -> (1, 0, 2, 3, 0)
+        1.0.2.3-experimental-1 -> (1, 0, 2, 3, 1)
+        1.0.2.3-experimental-2 -> (1, 0, 2, 3, 2)
+        1.0.2.4            -> (1, 0, 2, 4, 0)
+    """
+    import re
     tag = tag.lstrip("v").strip()
+    base, _, suffix = tag.partition("-")
     try:
-        return tuple(int(p) for p in tag.split("."))
+        parts = tuple(int(p) for p in base.split("."))
     except ValueError:
         return None
+    seq = 0
+    if suffix:
+        m = re.search(r"(\d+)$", suffix)
+        seq = int(m.group(1)) if m else 1
+    return parts + (seq,)
 
 
 def _pick_release(releases: list, channel: str) -> dict | None:

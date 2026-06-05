@@ -38,7 +38,7 @@ index 4f6d283e7..5258f1f98 100644
 +		// so a healthy session prints nothing and a real loss prints exactly once. A graceful
 +		// teardown (peer left, or local terminate) is expected and logs at notice; an abnormal
 +		// loss (timeout, link death) logs at warning so it stands out in a shared log.
-+		if (error_code == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_PEER || error_code == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_MYSELF)
++		if (static_cast<u32>(error_code) == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_PEER || static_cast<u32>(error_code) == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_MYSELF)
 +			sign_log.notice("Signaling connection closed: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
 +		else
 +			sign_log.warning("Signaling connection lost: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
