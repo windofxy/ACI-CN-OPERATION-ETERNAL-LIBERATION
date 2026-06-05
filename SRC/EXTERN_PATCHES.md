@@ -1,11 +1,14 @@
 # External patches
 
-This project carries four patches against upstream source trees, applied by
+This project carries seven patches against upstream source trees, applied by
 `SRC\apply-patches.bat`:
 
 - `SRC\PATCH\RPCS3\tss-support.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
 - `SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
 - `SRC\PATCH\RPCS3\tree-transparency.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
+- `SRC\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
+- `SRC\PATCH\RPCS3\np-signaling-conninfo-disconnect.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
+- `SRC\PATCH\RPCS3\np-disconnect-handling.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
 - `SRC\PATCH\RPCN\tss-server.patch` against [rpcn](https://github.com/RipleyTom/rpcn)
 
 The kit modifies upstream because the game depends on
@@ -190,6 +193,176 @@ polygon-class branch of `prepare_fragment_program` so it also applies to
 non-polygon primitive classes. Intended to address opaque-black backgrounds
 on point-sprite foliage in this game. Not confirmed to be the right fix in
 general; included as a workaround pending a proper investigation upstream.
+
+## RPCS3: `np-localnetinfo-byteorder-fix.patch`
+
+Modifies `rpcs3/Emu/Cell/Modules/sceNp.cpp` (`sceNpSignalingGetLocalNetInfo`)
+and `rpcs3/Emu/Cell/Modules/sceNp2.cpp`
+(`sceNpMatching2SignalingGetLocalNetInfo`).
+
+Both functions wrote the local and mapped IP addresses into PS3 emulated memory
+byte-swapped, so any title that reads its own LAN/WAN address from these APIs to
+advertise itself in a room attribute handed peers a corrupted address.
+
+### The bug
+
+`get_local_ip_addr()` / `get_public_ip_addr()` return a `u32` already in network
+byte order (the raw `sin_addr.s_addr`, whose in-memory bytes are the IP octets in
+order). The destination fields are `be_t<u32>`. A plain assignment to a `be_t`
+runs through `to_data()`, which byteswaps on a little-endian host; feeding an
+already-network-order value through that swap reverses the octets in emulated
+memory. The PS3 Cell CPU is big-endian (host order == network order), so on real
+hardware the field simply holds the network-order `s_addr`; only on RPCS3's LE
+host does the extra swap corrupt it. For 192.168.1.11 (`C0 A8 01 0B`) the buggy
+store produced `0B 01 A8 C0`.
+
+The fix replaces the assignment with
+`std::bit_cast<be_t<u32>, u32>(...)`, which reinterprets the network-order bytes
+as a `be_t` without re-swapping. This is the same idiom the working sys_net path
+already uses (`sys_net_helpers.cpp`, `native_addr_to_sys_net_addr`) to place a
+network-order address into a PS3 `be_t<u32>`.
+
+```cpp
+info->local_addr  = std::bit_cast<be_t<u32>, u32>(nph.get_local_ip_addr());
+info->mapped_addr = std::bit_cast<be_t<u32>, u32>(nph.get_public_ip_addr());
+```
+
+The neighbouring `nat_status` / `npport` / `natStatus` fields are left untouched:
+those take logical integer constants, for which plain `be_t` assignment is
+already correct. This is why, in a captured affected `roomBinAttrExternal` blob,
+the port (`SCE_NP_PORT`) survived while the two IPs came through reversed.
+
+### Scope
+
+The corruption is game-visible only and lives on the advertising side: a host
+writing its own room blob. RPCN stores `roomBinAttrExternal` as an opaque byte
+array and echoes it back verbatim, never parsing it as an IP, so no server change
+is needed and the fix works against the existing public RPCN. A searcher reads
+the raw blob bytes regardless of its own build, so there is no double-swap risk;
+an unpatched host produces the same swapped blob as before, with no regression.
+The one mixed-fleet wrinkle is titles that compare their own `GetLocalNetInfo`
+WAN against a peer's blob WAN to detect "same public IP, use LAN address": a
+patched node's correct WAN will not match an unpatched peer's swapped WAN, which
+can defeat that shortcut for two players behind the same router. All-patched and
+all-unpatched fleets are each internally consistent, so the patch is best rolled
+out to everyone at once.
+
+This is not a standalone fix for "players behind CG-NAT can't see each other's
+rooms", which is a P2P reachability failure (symmetric NAT can't complete the UDP
+hole punch) that a flat overlay network addresses. It is complementary: it stops
+the title's first probe from being aimed at a byte-swapped address that on
+symmetric NAT can mis-prime the NAT mapping and break the hole punch.
+
+## RPCS3: `np-signaling-conninfo-disconnect.patch`
+
+Modifies `rpcs3/Emu/Cell/Modules/sceNp2.cpp`
+(`sceNpMatching2SignalingGetConnectionInfo`).
+
+`p2ps-disconnect-fix.patch` marks a timed-out peer's signaling connection
+`INACTIVE` but keeps its `signaling_info` (the npid->conn_id mapping and the `si`
+both survive, so the peer can still recover). `SignalingGetConnectionInfo`
+resolves the peer by npid and returns its connection info (RTT, address, etc.) as
+long as the `si` exists - it never checks `conn_status`. So after a P2PS timeout
+this getter keeps returning success with a stale "connected" address.
+
+Static analysis of the game (NPUB31347) shows it polls this getter (with
+`code = PEER_ADDRESS`) while maintaining its per-member connection state, and only
+reacts to a negative return. Because RPCS3 never returns an error for a
+timed-out-but-still-present peer, the game's polled view never flips the member to
+"disconnected" - a plausible cause of the mid-mission host hang on a peer drop: a
+game loop waiting on the peer cannot observe the disconnect through this channel.
+
+The patch returns `SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND` when the resolved `si`
+is `INACTIVE`, so a poll of a dead peer fails instead of reporting it connected,
+and the title's own disconnect/error handling can run. This is a polled
+(synchronous) channel, so it works even when the game is stuck in a busy loop that
+is not pumping `cellSysutilCheckCallback`.
+
+The link from this getter to the specific mission hang is inferred from static
+analysis of the game binary plus reproduction logs, not yet confirmed in-game. The change is
+correct on its own terms regardless - a getter should not report a
+connection that signaling has already declared inactive as still live.
+
+## RPCS3: `np-disconnect-handling.patch`
+
+Modifies `rpcs3/Emu/NP/np_cache.cpp`, `rpcs3/Emu/NP/signaling_handler.cpp`, and
+`rpcs3/Emu/Cell/Modules/sceNp.cpp`. General hardening of peer-disconnect handling;
+it changes behaviour only on the disconnect paths and adds edge-triggered logging.
+
+**Ghost room member (`np_cache.cpp` `del_member`).** The function checked that the
+room existed and then ran `rooms.erase(member_id)` - erasing from the rooms map
+keyed by the *member* id, which is never a valid room id, so it removed nothing
+while returning success. The departed member stayed in the room's member list, so
+`GetRoomMemberDataInternalList` and friends kept returning a member whose leave
+callback had already fired: a room slot that stayed occupied but showed no player.
+The patch erases the member from `rooms[room_id].members` and returns false when
+the member was not present, which also makes the caller's leave-callback guard
+idempotent (no duplicate `MemberLeft`).
+
+**Edge-triggered disconnect logging (`signaling_handler.cpp` `update_si_status`).**
+A `warning`-level line is logged on the ACTIVE/PENDING -> INACTIVE signaling
+transition only (`update_si_status` already gates that branch), so a healthy
+session is silent and a real peer loss logs exactly once, with conn/room/member
+ids and the error code.
+
+**Consistent connection-info getter (`sceNp.cpp`
+`sceNpSignalingGetConnectionInfo`).** Like its matching2 sibling (see
+`np-signaling-conninfo-disconnect.patch`), this returned stale "connected" info for
+a peer whose `si` had gone INACTIVE because it never checked `conn_status`. It now
+returns `SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND` for an INACTIVE peer so a title
+polling it observes the drop.
+
+Known remaining gaps: the send-failure `close_stream` coverage gap is now closed by
+`p2ps-disconnect-diagnostics.patch` (the RST/FIN path is intentionally left alone there,
+since it is not a real teardown route for an established peer). Still open:
+`sceNpSignalingGetPeerNetInfoResult` is a stub that always returns `CELL_OK` - out of
+scope for disconnect handling, since the game tracks peer liveness via
+`GetConnectionInfo`, not the peer-net-info request/result flow.
+
+## RPCS3: `p2ps-disconnect-diagnostics.patch`
+
+Modifies `rpcs3/Emu/NP/signaling_handler.cpp` and
+`rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp`. A follow-up to
+`p2ps-disconnect-fix.patch`, kept as a separate file so it can be evaluated and
+dropped independently of that validated patch. It closes coverage gaps on the
+peer-teardown paths and sharpens disconnect logging; it changes behaviour only on
+the disconnect paths.
+
+**Exact peer match in `force_disconnect_by_addr` (`signaling_handler.cpp`).**
+`p2ps-disconnect-fix.patch` added `force_disconnect_by_addr(addr, port)` but matched
+on address only and returned on the first hit, ignoring the `port` argument. Two
+peers behind one public IP share an external address and differ only by port, so an
+address-only match could mark the wrong peer's signaling connection INACTIVE. The
+function now prefers an exact address+port match - `si->port` and the passed port
+are the same representation, both `bit_cast<u16, be_t<u16>>` of the peer's UDP
+endpoint, which carries signaling and P2PS together - and falls back to the first
+address-only match only when no port matches, so the common single-peer case is
+unchanged and a dead peer is never left connected.
+
+**Signaling INACTIVE on the send-failure close (`lv2_socket_p2ps.cpp`).**
+`p2ps-disconnect-fix.patch` drives the peer's signaling connection INACTIVE (via
+`force_disconnect_by_addr`) only on the retry-cap teardown. The send-failure path -
+where `tcp_timeout_monitor` resends a packet, the local `sendto` fails, and the stream
+is closed - tore the stream down without notifying signaling, so the polled
+connection-info getters kept reporting the peer connected until the 60s signaling
+timeout. This path now calls `force_disconnect_by_addr` for the dead peer too, mirroring
+the retry-cap path and running in the same lock context (the `tcp_timeout_monitor` loop
+already holds its own `data_mutex`; `force_disconnect_by_addr` takes the separate
+signaling `data_mutex`). The RST/FIN-receive close is deliberately left alone: RPCS3
+never sends FIN and only sends RST on a backlog-full connect rejection, so that branch
+is not a real teardown route for an established peer.
+
+**Disconnect logging at warning level (`signaling_handler.cpp`).** Two disconnect
+chokepoints that previously logged at `notice` (easy to miss in a shared log) now log an
+enriched `warning`: the 60s no-traffic signaling timeout, and the `force_disconnect_by_addr`
+match. Both are edge-triggered (once per real transition), so no per-retry or per-frame spam
+is added. The shared `update_si_status` headline carries the dropped peer's **npid (player
+name)** plus conn/room/member ids and the error code, and is split by reason: a graceful
+teardown (`TERMINATED_BY_PEER`/`TERMINATED_BY_MYSELF`) logs at `notice` so a normal player
+leaving is not reported as a fault, while an abnormal loss (timeout / link death) stays at
+`warning`. The npid matters for triage: a peer that drops silently never produces a
+`UserLeftRoom` (which is the only other line carrying the player name), so without it a
+frozen peer is only identifiable by member id.
 
 ## rpcn: `tss-server.patch`
 

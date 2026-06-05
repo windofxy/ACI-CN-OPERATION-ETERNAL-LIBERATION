@@ -1,0 +1,36 @@
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp.cpp b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+index e82491e..03bc8c4 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+@@ -7031,8 +7031,11 @@ error_code sceNpSignalingGetLocalNetInfo(u32 ctx_id, vm::ptr<SceNpSignalingNetIn
+ 		return SCE_NP_SIGNALING_ERROR_INVALID_ARGUMENT;
+ 	}
+ 
+-	info->local_addr  = nph.get_local_ip_addr();
+-	info->mapped_addr = nph.get_public_ip_addr();
++	// in_addr values are network byte order; the PS3 (big-endian) reads these be_t fields
++	// directly as s_addr, so the bytes must stay in network order. bit_cast preserves the
++	// raw bytes, whereas a plain assignment would byteswap and corrupt the address.
++	info->local_addr  = std::bit_cast<be_t<u32>, u32>(nph.get_local_ip_addr());
++	info->mapped_addr = std::bit_cast<be_t<u32>, u32>(nph.get_public_ip_addr());
+ 
+ 	// Pure speculation below
+ 	info->nat_status    = SCE_NP_SIGNALING_NETINFO_NAT_STATUS_TYPE2;
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+index 7809676..1fbef4d 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+@@ -1839,8 +1839,11 @@ error_code sceNpMatching2SignalingGetLocalNetInfo(vm::ptr<SceNpMatching2Signalin
+ 		return SCE_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+ 	}
+ 
+-	netinfo->localAddr  = nph.get_local_ip_addr();
+-	netinfo->mappedAddr = nph.get_public_ip_addr();
++	// in_addr values are network byte order; the PS3 (big-endian) reads these be_t fields
++	// directly as s_addr, so the bytes must stay in network order. bit_cast preserves the
++	// raw bytes, whereas a plain assignment would byteswap and corrupt the address.
++	netinfo->localAddr  = std::bit_cast<be_t<u32>, u32>(nph.get_local_ip_addr());
++	netinfo->mappedAddr = std::bit_cast<be_t<u32>, u32>(nph.get_public_ip_addr());
+ 
+ 	// Pure speculation below
+ 	netinfo->natStatus = SCE_NP_SIGNALING_NETINFO_NAT_STATUS_TYPE2;

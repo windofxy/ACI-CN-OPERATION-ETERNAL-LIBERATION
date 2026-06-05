@@ -87,8 +87,15 @@ def ensure_custom_config(
     return True
 
 
-def patch_game_config(cfg_path: str, lan_ip: str):
-    """Patch the three network keys in the per-game custom config in-place."""
+def patch_game_config(cfg_path: str, lan_ip: str, bind_address: str = "", upnp: bool = True):
+    """Patch the network keys in the per-game custom config in-place.
+
+    Always sets Internet enabled, PSN status, and the IP swap list. Sets RPCS3's
+    UPnP (automatic P2P port forwarding on supporting routers) on or off per the
+    upnp flag. Always writes RPCS3's Net "Bind address"; an empty bind_address
+    is treated as "0.0.0.0" (all interfaces) so a previously-saved specific IP
+    cannot linger in the config.
+    """
     with open(cfg_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -96,6 +103,10 @@ def patch_game_config(cfg_path: str, lan_ip: str):
     content = re.sub(r"Internet enabled:.*",  "Internet enabled: Connected", content)
     content = re.sub(r"PSN status:.*",        "PSN status: RPCN",           content)
     content = re.sub(r"IP swap list:.*",      f"IP swap list: {swap}",       content)
+    content = re.sub(r"UPNP Enabled:.*",  f"UPNP Enabled: {'true' if upnp else 'false'}", content)
+    content = re.sub(r"Bind address:.*",
+                     f"Bind address: {bind_address or '0.0.0.0'}", content)
+    content = re.sub(r"Frame limit:.*", "Frame limit: Auto", content)
 
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(content)

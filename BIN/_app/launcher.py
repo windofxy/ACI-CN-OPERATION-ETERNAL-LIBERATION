@@ -6,12 +6,13 @@ import os
 import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QTimer, QUrl,
 )
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtNetwork import (
     QNetworkAccessManager, QNetworkRequest, QNetworkReply,
 )
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QTabWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QPushButton, QToolButton, QRadioButton, QLineEdit, QGroupBox, QComboBox,
+    QCheckBox,
     QTreeWidget, QTreeWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QFileDialog,
     QSpinBox, QFrame, QSizePolicy, QButtonGroup, QScrollArea,
@@ -49,9 +51,13 @@ RPCS3_TSS   = PORTABLE_DIR / "tss"
 RPCN_TSS    = RPCN_DIR / "tss_data" / "NPWR04428_00"
 SETTINGS_FILE = APP_DIR / "settings.json"
 
-VERSION = "1.0.2.2"
+VERSION          = "1.0.2.3"
+RELEASE_CHANNEL  = "experimental"   # "main" for stable releases, "experimental" for pre-releases
+GITHUB_REPO      = "The-OPERATIONS-Team/OPERATION-ETERNAL-LIBERATION"
 
-COMMUNITY_RPCN_HOST = "np.rpcs3.net"
+COMMUNITY_RPCN_HOST  = "np.rpcs3.net"
+OPERATIONS_GAME_ADDR = "oel-game.killerbyte.xyz:8000:8001"
+TELEMETRY_URL        = "https://oel-telemetry.killerbyte.xyz"
 
 FIRMWARE_INDICATOR = PORTABLE_DIR / "dev_flash" / "sys" / "external" / "libsre.sprx"
 GAME_INDICATOR     = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "PARAM.SFO"
@@ -60,7 +66,9 @@ GAME_USRDIR        = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB3134
 # Modules live next to this file
 sys.path.insert(0, str(APP_DIR))
 from modules import ip_detect, config as cfg_mod, tss as tss_mod
-from modules import save_editor, tus_saves, processes
+from modules import save_editor, tus_saves, processes, hash_util
+from modules.telemetry import TelemetryStreamer
+from modules.updater import UpdateChecker
 
 # ---------------------------------------------------------------------------
 # Settings helpers
@@ -68,11 +76,17 @@ from modules import save_editor, tus_saves, processes
 _DEFAULTS = {
     "rpcn_mode": "official",       # official | self_hosted | custom
     "rpcn_custom_host": "",
-    "gameserver_mode": "self_hosted",  # self_hosted | remote
+    "gameserver_mode": "self_hosted",  # self_hosted | remote | operations
     "gameserver_remote_ip": "",
+    "rpcs3_bind_address": "",       # "" = RPCS3 default (0.0.0.0, all interfaces)
+    "rpcs3_upnp": True,             # enable RPCS3 UPnP port forwarding (opt-out)
     "tss_download_url": "",
     "save_editor_folder": "",
     "network_interface": "",       # "" = auto (default route), else explicit IPv4
+    "enable_telemetry": False,
+    "telemetry_client_id": "",
+    "auto_check_updates": RELEASE_CHANNEL == "experimental",
+    "update_channel": RELEASE_CHANNEL,
 }
 
 def load_settings() -> dict:
@@ -119,11 +133,14 @@ class LaunchWorker(QThread):
     failed  = Signal(str)
     done    = Signal(str)  # emits resolved LAN IP
 
-    def __init__(self, rpcn_host: str, rpcn_mode: str, lan_ip_override: str = "", parent=None):
+    def __init__(self, rpcn_host: str, rpcn_mode: str, lan_ip_override: str = "",
+                 bind_address: str = "", upnp: bool = True, parent=None):
         super().__init__(parent)
         self.rpcn_host = rpcn_host
         self.rpcn_mode = rpcn_mode
         self.lan_ip_override = lan_ip_override
+        self.bind_address = bind_address
+        self.upnp = upnp
 
     def run(self):
         try:
@@ -157,7 +174,7 @@ class LaunchWorker(QThread):
             if not ok:
                 self.failed.emit("RPCS3 did not generate a config within 30 seconds.")
                 return
-            cfg_mod.patch_game_config(str(CUSTOM_CFG), swap_ip)
+            cfg_mod.patch_game_config(str(CUSTOM_CFG), swap_ip, self.bind_address, self.upnp)
             self.log.emit("RPCS3 network config patched.")
 
             self.log.emit("Writing RPCN config...")
@@ -215,6 +232,7 @@ class TssDownloader(QObject):
 # ---------------------------------------------------------------------------
 # Game files checksum worker
 # ---------------------------------------------------------------------------
+
 class ChecksumWorker(QThread):
     """SHA-256 of every file under a tree, walked in sorted relative-path order."""
 
@@ -226,23 +244,7 @@ class ChecksumWorker(QThread):
 
     def run(self):
         try:
-            h = hashlib.sha256()
-            files = sorted(
-                (p for p in self._root.rglob("*") if p.is_file()),
-                key=lambda p: p.relative_to(self._root).as_posix(),
-            )
-            for p in files:
-                rel = p.relative_to(self._root).as_posix().encode("utf-8")
-                # Length-prefix the path so e.g. "a/bc" and "ab/c" cannot collide.
-                h.update(len(rel).to_bytes(4, "big"))
-                h.update(rel)
-                with p.open("rb") as fh:
-                    while True:
-                        chunk = fh.read(1 << 20)
-                        if not chunk:
-                            break
-                        h.update(chunk)
-            self.done.emit(h.hexdigest())
+            self.done.emit(hash_util.hash_tree(self._root))
         except OSError as e:
             self.done.emit(f"error: {e}")
 
@@ -259,6 +261,7 @@ class PlayTab(QWidget):
         self._rpcn_running = False
         self._checksum_worker: ChecksumWorker | None = None
         self._checksum_done = False
+        self._game_hash = ""
         self._build_ui()
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(2000)
@@ -321,9 +324,41 @@ class PlayTab(QWidget):
         gs_remote_row.addWidget(self._gs_remote_ip)
         gs_layout.addWidget(self._gs_remote_row_widget)
 
+        self._gs_operations = QRadioButton("-OPERATIONS- Team server")
+        self._gs_group.addButton(self._gs_operations)
+        gs_layout.addWidget(self._gs_operations)
+        self._gs_ops_panel = QWidget()
+        ops_panel_layout = QVBoxLayout(self._gs_ops_panel)
+        ops_panel_layout.setContentsMargins(20, 0, 0, 0)
+        ops_info = QLabel("Connects to the -OPERATIONS- community server.")
+        ops_info.setStyleSheet("color: gray; font-style: italic;")
+        ops_panel_layout.addWidget(ops_info)
+        self._telemetry_check = QCheckBox("Share RPCS3 logs to help improve the emulator (anonymized)")
+        self._telemetry_check.setChecked(bool(self._settings.get("enable_telemetry", False)))
+        self._telemetry_check.toggled.connect(self._on_telemetry_changed)
+        ops_panel_layout.addWidget(self._telemetry_check)
+        gs_layout.addWidget(self._gs_ops_panel)
+
         root.addWidget(gs_grp)
+
+        # RPCS3 group
+        rpcs3_grp = QGroupBox("RPCS3")
+        rpcs3_layout = QVBoxLayout(rpcs3_grp)
+        bind_row = QHBoxLayout()
+        bind_row.addWidget(QLabel("Bind address:"))
+        self._rpcs3_bind_combo = QComboBox()
+        bind_row.addWidget(self._rpcs3_bind_combo, 1)
+        rpcs3_layout.addLayout(bind_row)
+
+        self._upnp_check = QCheckBox("Enable UPnP (automatic port forwarding)")
+        self._upnp_check.setChecked(bool(self._settings.get("rpcs3_upnp", True)))
+        self._upnp_check.toggled.connect(self._on_upnp_changed)
+        rpcs3_layout.addWidget(self._upnp_check)
+        root.addWidget(rpcs3_grp)
+
         self._refresh_interfaces()
         self._iface_combo.currentIndexChanged.connect(self._on_iface_changed)
+        self._rpcs3_bind_combo.currentIndexChanged.connect(self._on_rpcs3_bind_changed)
 
         # Restore saved modes
         rpcn_mode = self._settings.get("rpcn_mode", "official")
@@ -338,13 +373,15 @@ class PlayTab(QWidget):
         gs_mode = self._settings.get("gameserver_mode", "self_hosted")
         if gs_mode == "remote":
             self._gs_remote.setChecked(True)
+        elif gs_mode == "operations":
+            self._gs_operations.setChecked(True)
         else:
             self._gs_selfhosted.setChecked(True)
         self._gs_remote_ip.setText(self._settings.get("gameserver_remote_ip", ""))
 
         self._update_custom_visibility()
         for b in (self._rpcn_official, self._rpcn_selfhosted, self._rpcn_custom,
-                  self._gs_selfhosted, self._gs_remote):
+                  self._gs_selfhosted, self._gs_remote, self._gs_operations):
             b.toggled.connect(self._update_custom_visibility)
         for b in (self._rpcn_official, self._rpcn_selfhosted, self._rpcn_custom):
             b.toggled.connect(self._update_rpcn_indicator)
@@ -431,6 +468,7 @@ class PlayTab(QWidget):
         self._rpcn_custom_host.setVisible(self._rpcn_custom.isChecked())
         self._gs_iface_row_widget.setVisible(self._gs_selfhosted.isChecked())
         self._gs_remote_row_widget.setVisible(self._gs_remote.isChecked())
+        self._gs_ops_panel.setVisible(self._gs_operations.isChecked())
 
     def refresh_setup_status(self):
         fw_ok   = FIRMWARE_INDICATOR.exists()
@@ -484,9 +522,13 @@ class PlayTab(QWidget):
         self._checksum_field.setToolTip(digest)
         self._checksum_field.setCursorPosition(0)
         self._checksum_done = True
+        self._game_hash = digest
         if self._checksum_worker is not None:
             self._checksum_worker.deleteLater()
             self._checksum_worker = None
+
+    def get_game_hash(self) -> str:
+        return self._game_hash
 
     def _browse_tss(self):
         folder = QFileDialog.getExistingDirectory(self, "Select folder containing TSS files")
@@ -513,7 +555,11 @@ class PlayTab(QWidget):
         return self._rpcn_custom_host.text().strip()
 
     def get_gameserver_mode(self) -> str:
-        return "remote" if self._gs_remote.isChecked() else "self_hosted"
+        if self._gs_operations.isChecked():
+            return "operations"
+        if self._gs_remote.isChecked():
+            return "remote"
+        return "self_hosted"
 
     def get_gameserver_remote_ip(self) -> str:
         return self._gs_remote_ip.text().strip()
@@ -523,20 +569,54 @@ class PlayTab(QWidget):
         return self._iface_combo.currentData() or ""
 
     def _refresh_interfaces(self):
+        lan_ips = ip_detect.list_lan_ips()
+
         previous = self._iface_combo.currentData() if self._iface_combo.count() else \
             self._settings.get("network_interface", "")
         self._iface_combo.blockSignals(True)
         self._iface_combo.clear()
         self._iface_combo.addItem("Auto (default route)", "")
-        for ip in ip_detect.list_lan_ips():
+        for ip in lan_ips:
             self._iface_combo.addItem(ip, ip)
         idx = self._iface_combo.findData(previous) if previous else 0
         self._iface_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._iface_combo.blockSignals(False)
 
+        prev_bind = self._rpcs3_bind_combo.currentData() if self._rpcs3_bind_combo.count() \
+            else self._settings.get("rpcs3_bind_address", "")
+        self._rpcs3_bind_combo.blockSignals(True)
+        self._rpcs3_bind_combo.clear()
+        self._rpcs3_bind_combo.addItem("Default (0.0.0.0, all interfaces)", "")
+        for ip in lan_ips:
+            self._rpcs3_bind_combo.addItem(ip, ip)
+        bidx = self._rpcs3_bind_combo.findData(prev_bind) if prev_bind else 0
+        self._rpcs3_bind_combo.setCurrentIndex(bidx if bidx >= 0 else 0)
+        self._rpcs3_bind_combo.blockSignals(False)
+
     def _on_iface_changed(self):
         self._settings["network_interface"] = self._iface_combo.currentData() or ""
         save_settings(self._settings)
+
+    def _on_rpcs3_bind_changed(self):
+        self._settings["rpcs3_bind_address"] = self._rpcs3_bind_combo.currentData() or ""
+        save_settings(self._settings)
+
+    def get_rpcs3_bind_address(self) -> str:
+        """Return the chosen RPCS3 bind address, or '' for the RPCS3 default."""
+        return self._rpcs3_bind_combo.currentData() or ""
+
+    def _on_upnp_changed(self, checked: bool):
+        self._settings["rpcs3_upnp"] = checked
+        save_settings(self._settings)
+
+    def _on_telemetry_changed(self, checked: bool):
+        self._settings["enable_telemetry"] = checked
+        if checked and not self._settings.get("telemetry_client_id"):
+            self._settings["telemetry_client_id"] = str(uuid.uuid4())
+        save_settings(self._settings)
+
+    def get_rpcs3_upnp(self) -> bool:
+        return self._upnp_check.isChecked()
 
     def set_process_status(self, name: str, running: bool):
         if name == "rpcn":
@@ -1188,6 +1268,30 @@ class SettingsTab(QWidget):
         form.addRow("TSS download URL:", self._tss_url)
 
         root.addLayout(form)
+
+        # ---- Updates group ------------------------------------------------
+        upd_grp = QGroupBox("Updates")
+        upd_form = QFormLayout(upd_grp)
+        upd_form.setSpacing(8)
+
+        self._auto_check = QCheckBox("Check for updates on startup")
+        self._auto_check.setChecked(self._settings.get("auto_check_updates", False))
+        upd_form.addRow(self._auto_check)
+
+        self._channel_combo = QComboBox()
+        self._channel_combo.addItem("Main (stable)",       "main")
+        self._channel_combo.addItem("Experimental (pre-release)", "experimental")
+        saved_channel = self._settings.get("update_channel", RELEASE_CHANNEL)
+        idx = self._channel_combo.findData(saved_channel)
+        if idx >= 0:
+            self._channel_combo.setCurrentIndex(idx)
+        upd_form.addRow("Update channel:", self._channel_combo)
+
+        self._check_now_btn = QPushButton("Check for updates now")
+        self._check_now_btn.clicked.connect(self._check_now)
+        upd_form.addRow(self._check_now_btn)
+
+        root.addWidget(upd_grp)
         root.addStretch()
 
         btn_row = QHBoxLayout()
@@ -1201,8 +1305,31 @@ class SettingsTab(QWidget):
         save_btn.clicked.connect(self._save)
         reset_btn.clicked.connect(self._reset)
 
+    def _check_now(self):
+        self._check_now_btn.setEnabled(False)
+        self._check_now_btn.setText("Checking...")
+        channel = self._channel_combo.currentData()
+        checker = UpdateChecker(self)
+        checker.update_available.connect(self._on_update_found)
+        checker.check_complete.connect(self._on_check_done)
+        checker.check(GITHUB_REPO, channel, VERSION)
+
+    def _on_update_found(self, version: str, url: str):
+        btn = QMessageBox.question(
+            self, "Update available",
+            f"Version {version} is available.\nOpen the download page?",
+        )
+        if btn == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _on_check_done(self):
+        self._check_now_btn.setEnabled(True)
+        self._check_now_btn.setText("Check for updates now")
+
     def _save(self):
         self._settings["tss_download_url"] = self._tss_url.text().strip()
+        self._settings["auto_check_updates"] = self._auto_check.isChecked()
+        self._settings["update_channel"] = self._channel_combo.currentData()
         save_settings(self._settings)
         self.saved.emit(self._settings)
         QMessageBox.information(self, "Saved", "Settings saved.")
@@ -1276,6 +1403,7 @@ class ACILauncher(QMainWindow):
         self._restore_staged = False
         self._save_load_offer_shown = False
         self._last_penalty_check_path: str | None = None
+        self._telemetry: TelemetryStreamer | None = None
 
         for proc, name in ((self._gameserver, "gameserver"),
                            (self._rpcn_proc,  "rpcn"),
@@ -1297,6 +1425,9 @@ class ACILauncher(QMainWindow):
 
         # Let the window paint before the first penalty check.
         QTimer.singleShot(800, self._check_penalty_rank)
+
+        if self._settings.get("auto_check_updates"):
+            QTimer.singleShot(1500, self._check_for_updates_startup)
 
     def _build_ui(self):
         central = QWidget()
@@ -1351,6 +1482,8 @@ class ACILauncher(QMainWindow):
         self._settings["rpcn_custom_host"]     = self._play_tab.get_rpcn_custom_host()
         self._settings["gameserver_mode"]      = gs_mode
         self._settings["gameserver_remote_ip"] = self._play_tab.get_gameserver_remote_ip()
+        self._settings["rpcs3_bind_address"]   = self._play_tab.get_rpcs3_bind_address()
+        self._settings["rpcs3_upnp"]           = self._play_tab.get_rpcs3_upnp()
         save_settings(self._settings)
 
         rpcn_host = self._resolve_rpcn_host()
@@ -1376,7 +1509,9 @@ class ACILauncher(QMainWindow):
         self._save_load_offer_shown = False
         self._play_tab.set_launch_enabled(False)
         lan_ip_override = self._play_tab.get_lan_ip_override()
-        self._worker = LaunchWorker(rpcn_host, rpcn_mode, lan_ip_override, self)
+        bind_address    = self._play_tab.get_rpcs3_bind_address()
+        upnp            = self._play_tab.get_rpcs3_upnp()
+        self._worker = LaunchWorker(rpcn_host, rpcn_mode, lan_ip_override, bind_address, upnp, self)
         self._worker.log.connect(self._on_worker_log)
         self._worker.failed.connect(self._on_worker_failed)
         self._worker.done.connect(self._on_worker_done)
@@ -1412,6 +1547,13 @@ class ACILauncher(QMainWindow):
                                     f"Could not parse remote address: {e}")
                 self._play_tab.set_launch_enabled(True)
                 return
+        elif gs_mode == "operations":
+            host, http_p, https_p = parse_remote_addr(OPERATIONS_GAME_ADDR)
+            gs_args += [
+                "--forward", host,
+                "--forward-http-port",  str(http_p),
+                "--forward-https-port", str(https_p),
+            ]
 
         if not processes.is_port_open(swap_ip):
             ok = self._gameserver.launch(
@@ -1434,10 +1576,32 @@ class ACILauncher(QMainWindow):
             self._restore_staged = False
             self._rpcs3_proc.launch(str(RPCS3_EXE), [], cwd=str(RPCS3_DIR))
 
+        if (gs_mode == "operations"
+                and self._settings.get("enable_telemetry")
+                and self._telemetry is None):
+            self._telemetry = TelemetryStreamer(
+                log_path=PORTABLE_DIR / "log" / "RPCS3.log",
+                url=TELEMETRY_URL,
+                metadata={
+                    "version":     VERSION,
+                    "client_id":   self._settings.get("telemetry_client_id", ""),
+                    "session_id":  str(uuid.uuid4()),
+                    "app_root":    str(APP_DIR),
+                    "game_usrdir": str(GAME_USRDIR),
+                    "rpcs3_exe":   str(RPCS3_EXE),
+                    "game_hash":   self._play_tab.get_game_hash(),
+                    "rpcs3_hash":  "",
+                },
+            )
+            self._telemetry.start()
+
         self._play_tab.set_launch_enabled(True)
         self._tss_tab.refresh()
 
     def _on_rpcs3_stopped(self, _exit_code: int):
+        if self._telemetry is not None:
+            self._telemetry.stop()
+            self._telemetry = None
         self._play_tab.refresh_setup_status()
         tus_saves.cleanup_restore_sentinels(str(PORTABLE_DIR / "tus"))
         self._restore_staged = False
@@ -1523,12 +1687,30 @@ class ACILauncher(QMainWindow):
                 "Reboot OPERATION ETERNAL LIBERATION to start fresh."
             )
 
+    def _check_for_updates_startup(self):
+        channel = self._settings.get("update_channel", RELEASE_CHANNEL)
+        checker = UpdateChecker(self)
+        checker.update_available.connect(self._on_update_available)
+        checker.check(GITHUB_REPO, channel, VERSION)
+
+    def _on_update_available(self, version: str, url: str):
+        btn = QMessageBox.question(
+            self, "Update available",
+            f"Version {version} is available.\nOpen the download page?",
+        )
+        if btn == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(QUrl(url))
+
     def _on_settings_saved(self, settings: dict):
         self._settings = settings
         self._tss_tab._settings = settings
 
     def closeEvent(self, event):
         self._log_watcher.stop()
+        if self._telemetry is not None:
+            self._telemetry.stop()
+            self._telemetry.join(timeout=15)
+            self._telemetry = None
         for proc in (self._gameserver, self._rpcn_proc, self._rpcs3_proc):
             proc.stop()
         super().closeEvent(event)

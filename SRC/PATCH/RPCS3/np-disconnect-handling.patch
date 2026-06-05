@@ -1,0 +1,55 @@
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp.cpp b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+index e82491eac..be65a47df 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+@@ -6908,6 +6908,12 @@ error_code sceNpSignalingGetConnectionInfo(u32 ctx_id, u32 conn_id, s32 code, vm
+ 	if (!si)
+ 		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
+ 
++	// A peer whose signaling connection has gone INACTIVE (P2PS timeout etc.) keeps its
++	// si until cleanup; reporting stale connection info for it hides the disconnect from
++	// titles that poll this getter. Mirror the matching2 variant and report it gone.
++	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
++
+ 	switch (code)
+ 	{
+ 		case SCE_NP_SIGNALING_CONN_INFO_RTT:
+diff --git a/rpcs3/Emu/NP/np_cache.cpp b/rpcs3/Emu/NP/np_cache.cpp
+index 4d70cacaa..c072cd797 100644
+--- a/rpcs3/Emu/NP/np_cache.cpp
++++ b/rpcs3/Emu/NP/np_cache.cpp
+@@ -109,7 +109,18 @@ namespace np
+ 			return false;
+ 		}
+ 
+-		rooms.erase(member_id);
++		// Erase the member from the room's member list. This previously erased from the
++		// rooms map keyed by member_id - a no-op, since member ids are not room ids - which
++		// left the departed member in the room's member list. The member-list getters then
++		// kept returning that member even after its leave callback fired, leaving a "ghost"
++		// slot that was occupied but showed no player. Returning false when the member was
++		// not present also keeps the caller's leave-callback guard idempotent.
++		if (::at32(rooms, room_id).members.erase(member_id) == 0)
++		{
++			np_cache.warning("np_cache::del_member: member(%d) not present in room(%d) (already removed?)", member_id, room_id);
++			return false;
++		}
++
+ 		return true;
+ 	}
+ 
+diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
+index a4c59763c..a3ff348b6 100644
+--- a/rpcs3/Emu/NP/signaling_handler.cpp
++++ b/rpcs3/Emu/NP/signaling_handler.cpp
+@@ -592,6 +592,9 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
+ 	}
+ 	else if ((si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_PENDING || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE) && new_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+ 	{
++		// Edge-triggered: only logged on the actual ACTIVE/PENDING -> INACTIVE transition,
++		// so a healthy session prints nothing and a real peer loss prints exactly once.
++		sign_log.warning("Signaling connection lost: conn_id %d, member(%d) of room(%d), error 0x%x", si->conn_id, si->member_id, si->room_id, error_code);
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
+ 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_DEAD, error_code);
+ 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Dead, error_code);

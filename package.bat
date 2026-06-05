@@ -30,6 +30,19 @@ if not exist "!ISCC!" (
 echo Output: %ROOT%  (version !VERSION!)
 echo.
 
+:: 0. Provision embeddable Python so the installer can bundle it (no first-run
+::    download for end users). Only runs when absent; needs internet once.
+if not exist "%ROOT%BIN\_app\python\pythonw.exe" (
+    echo [0/3] Provisioning embeddable Python...
+    call "%ROOT%BIN\_app\setup.bat"
+    if not exist "%ROOT%BIN\_app\python\pythonw.exe" (
+        echo ERROR: Python provisioning failed. Cannot bundle it.
+        pause & exit /b 1
+    )
+    echo Done.
+    echo.
+)
+
 :: 1. Build installer
 echo [1/3] Building installer...
 "!ISCC!" "%ROOT%OEL.iss"

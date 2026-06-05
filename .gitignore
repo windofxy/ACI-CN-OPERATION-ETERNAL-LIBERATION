@@ -33,12 +33,16 @@ __pycache__/
 /BIN/_app/settings.json
 
 # -------------------------------------------------------
-# Game server generated certs and logs
+# Game server generated certs, logs, and runtime data
 # -------------------------------------------------------
 /BIN/_app/gameserver/cert.pem
 /BIN/_app/gameserver/key.pem
 /BIN/_app/gameserver/*.log
 /BIN/_app/gameserver/*.log.gz
+/BIN/_app/gameserver/community/.env
+/BIN/_app/gameserver/community/stats.db
+/BIN/_app/gameserver/community/stats.db-shm
+/BIN/_app/gameserver/community/stats.db-wal
 /BIN/logs/
 
 # -------------------------------------------------------

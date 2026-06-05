@@ -1,0 +1,20 @@
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+index 780967607..d4a8c7780 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+@@ -716,6 +716,15 @@ error_code sceNpMatching2SignalingGetConnectionInfo(
+ 	if (!si)
+ 		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
+ 
++	// A peer whose P2PS link has timed out is marked INACTIVE by
++	// signaling_handler::force_disconnect_by_addr, but its signaling_info is kept
++	// (npid->conn_id mapping and the si both survive). The game polls this getter
++	// to track peer liveness and only reacts to a negative return, so reporting
++	// stale "connected" info for a dead peer hides the disconnect and can hang a
++	// mission that waits on that peer. Report the connection as gone instead.
++	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
++
+ 	switch (code)
+ 	{
+ 		case SCE_NP_SIGNALING_CONN_INFO_RTT:

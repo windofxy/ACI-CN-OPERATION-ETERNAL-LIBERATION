@@ -2,7 +2,7 @@
 ; Bump AppVersion for each release. Do not change AppId after first release.
 
 #define AppName    "OPERATION ETERNAL LIBERATION"
-#define AppVersion "1.0.2.2"
+#define AppVersion "1.0.2.3"
 
 [Setup]
 AppId={{3D7F2C1A-B8E4-4F2D-9C5E-1A2B3C4D5E6F}
@@ -35,6 +35,11 @@ Source: "BIN\Play OPERATION ETERNAL LIBERATION (Windows).bat"; DestDir: "{app}";
 Source: "BIN\_app\launcher.py";                    DestDir: "{app}\_app";            Flags: ignoreversion
 Source: "BIN\_app\setup.bat";                      DestDir: "{app}\_app";            Flags: ignoreversion
 Source: "BIN\_app\assets\*";                       DestDir: "{app}\_app\assets";     Flags: ignoreversion recursesubdirs
+
+; Embeddable Python runtime (bundled so first-run needs no download).
+; Provisioned on the build machine by package.bat (via setup.bat); gitignored
+; like the RPCS3 binaries. setup.bat stays as a runtime fallback if absent.
+Source: "BIN\_app\python\*";                       DestDir: "{app}\_app\python";     Flags: ignoreversion recursesubdirs
 
 ; Python modules
 Source: "BIN\_app\modules\*.py";                   DestDir: "{app}\_app\modules";    Flags: ignoreversion

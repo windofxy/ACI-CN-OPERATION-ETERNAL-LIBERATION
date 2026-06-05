@@ -40,6 +40,11 @@ CERT_PATH = HERE / "cert.pem"
 KEY_PATH = HERE / "key.pem"
 LOG_DIR = Path(os.environ.get("OEL_LOG_DIR", str(HERE)))
 
+try:
+    from community import opeternal_community as _community
+except ImportError:
+    _community = None
+
 _print_lock = threading.Lock()
 _log_file = None
 
@@ -57,7 +62,7 @@ def log(msg):
 
 def _prune_gz_logs():
     gz_files = sorted(LOG_DIR.glob("gameserver_*.log.gz"), key=lambda p: p.stat().st_mtime)
-    for old in gz_files[:-1]:
+    for old in gz_files[:-20]:
         try:
             old.unlink()
         except OSError:
@@ -490,6 +495,10 @@ def main():
 
     _rotate_log()
     _install_close_handler()
+
+    if _community and _community.enabled():
+        _community.install(route)
+        _community.init()
 
     art_file = HERE.parent / "assets" / "ascii.txt"
     if art_file.exists():

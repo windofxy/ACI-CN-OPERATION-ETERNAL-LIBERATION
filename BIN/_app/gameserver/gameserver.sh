@@ -17,6 +17,8 @@ if [ ! -x "$PYEXE" ]; then
 fi
 
 BIND_IP="${1:-0.0.0.0}"
+HTTP_PORT="${2:-80}"
+HTTPS_PORT="${3:-443}"
 
 cd "$HERE"
-exec "$PYEXE" opeternal_listener.py --bind-ip "$BIND_IP"
+exec "$PYEXE" opeternal_listener.py --bind-ip "$BIND_IP" --http-port "$HTTP_PORT" --https-port "$HTTPS_PORT"

@@ -1,0 +1,103 @@
+diff --git a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+index ed32fa6bb..0da2a808f 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+@@ -180,6 +180,13 @@ public:
+ 
+ 				if (!res || !res.ret)
+ 				{
++					// The stream was closed (send failed) or the socket is gone. Mirror the
++					// retry-cap path and mark the peer's signaling connection INACTIVE, so the
++					// polled getters report it gone immediately instead of after the 60s
++					// signaling timeout. Same lock context as the retry-cap call above.
++					g_fxo->get<named_thread<signaling_handler>>().force_disconnect_by_addr(
++						msg.dst_addr.sin_addr.s_addr,
++						std::bit_cast<u16, be_t<u16>>(msg.dst_addr.sin_port));
+ 					it = msgs.erase(it);
+ 					// Remove all remaining messages for this socket (send failed -> stream closed,
+ 					// or socket gone). data_mutex already held; cannot call clear_all_messages.
+diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
+index 4f6d283e7..5258f1f98 100644
+--- a/rpcs3/Emu/NP/signaling_handler.cpp
++++ b/rpcs3/Emu/NP/signaling_handler.cpp
+@@ -425,7 +425,7 @@ void signaling_handler::operator()()
+ 			{
+ 				// We had no connection to opponent for 60 seconds, consider the connection dead
+ 				auto retire_info = sig.sig_info;
+-				sign_log.notice("Timeout disconnection");
++				sign_log.warning("Signaling timeout (no packets for 60s): conn_id %d, member(%d) of room(%d)", retire_info->conn_id, retire_info->member_id, retire_info->room_id);
+ 				update_si_status(retire_info, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
+ 				retire_packet(retire_info, signal_ping); // Retire ping packet if necessary
+ 				break; // qpackets has been emptied of all packets for this user so we're requeuing
+@@ -593,8 +593,13 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
+ 	else if ((si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_PENDING || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE) && new_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+ 	{
+ 		// Edge-triggered: only logged on the actual ACTIVE/PENDING -> INACTIVE transition,
+-		// so a healthy session prints nothing and a real peer loss prints exactly once.
+-		sign_log.warning("Signaling connection lost: conn_id %d, member(%d) of room(%d), error 0x%x", si->conn_id, si->member_id, si->room_id, error_code);
++		// so a healthy session prints nothing and a real loss prints exactly once. A graceful
++		// teardown (peer left, or local terminate) is expected and logs at notice; an abnormal
++		// loss (timeout, link death) logs at warning so it stands out in a shared log.
++		if (error_code == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_PEER || error_code == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_MYSELF)
++			sign_log.notice("Signaling connection closed: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
++		else
++			sign_log.warning("Signaling connection lost: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
+ 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_DEAD, error_code);
+ 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Dead, error_code);
+@@ -874,6 +879,17 @@ void signaling_handler::force_disconnect_by_addr(u32 addr, u16 port)
+ {
+ 	std::lock_guard lock(data_mutex);
+ 
++	// Prefer an exact addr+port match: two peers behind one public IP share an external
++	// address and differ only by port, so an addr-only match could disconnect the wrong
++	// peer. Fall back to the first addr-only match if no port matches, which preserves the
++	// original behaviour for the common single-peer case and never leaves a dead peer
++	// connected. si->port and the passed port share the same representation - both are
++	// bit_cast<u16, be_t<u16>>(sin_port) of the same peer UDP endpoint (signaling and P2PS
++	// ride the same port) - so a direct == is correct.
++	std::shared_ptr<signaling_info> addr_only_si;
++	u32 addr_only_conn_id        = 0;
++	const char* addr_only_kind   = "";
++
+ 	for (auto& [conn_id, si] : sig_peers)
+ 	{
+ 		if (!si || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+@@ -885,14 +901,33 @@ void signaling_handler::force_disconnect_by_addr(u32 addr, u16 port)
+ 		const bool direct_match = (si->addr == addr);
+ 		const bool mapped_match = (si->mapped_addr != 0 && si->mapped_addr == addr);
+ 
+-		if (direct_match || mapped_match)
++		if (!direct_match && !mapped_match)
++			continue;
++
++		const char* kind      = direct_match ? "direct" : "mapped";
++		const bool port_match = (direct_match && si->port == port) || (mapped_match && si->mapped_port == port);
++
++		if (port_match)
+ 		{
+-			sign_log.notice("[P2PS] P2PS timeout triggered signaling disconnect for conn_id %d (%s match)",
+-				conn_id, direct_match ? "direct" : "mapped");
++			sign_log.warning("[P2PS] Peer timed out, dropping signaling connection: conn_id %d (%s addr+port match)", conn_id, kind);
+ 			update_si_status(si, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
+ 			return;
+ 		}
++
++		if (!addr_only_si)
++		{
++			addr_only_si      = si;
++			addr_only_conn_id = conn_id;
++			addr_only_kind    = kind;
++		}
++	}
++
++	if (addr_only_si)
++	{
++		sign_log.warning("[P2PS] Peer timed out, dropping signaling connection: conn_id %d (%s addr match, port differed)", addr_only_conn_id, addr_only_kind);
++		update_si_status(addr_only_si, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
++		return;
+ 	}
+ 
+-	sign_log.notice("[P2PS] P2PS timeout: no active signaling connection found");
++	sign_log.warning("[P2PS] Peer timeout could not be matched to an active signaling connection");
+ }
