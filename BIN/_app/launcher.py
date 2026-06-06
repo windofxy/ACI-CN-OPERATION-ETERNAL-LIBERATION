@@ -53,7 +53,7 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 
 VERSION          = "1.0.2.3"
 RELEASE_CHANNEL  = "experimental"   # "main" for stable releases, "experimental" for pre-releases
-GITHUB_REPO      = "The-OPERATIONS-Team/OPERATION-ETERNAL-LIBERATION"
+GITHUB_REPO      = "windofxy/ACI-CN-OPERATION-ETERNAL-LIBERATION"
 
 COMMUNITY_RPCN_HOST  = "np.rpcs3.net"
 OPERATIONS_GAME_ADDR = "oel-game.killerbyte.xyz:8000:8001"
