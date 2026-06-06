@@ -293,12 +293,13 @@ jobs:
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      # Same msbuild invocation rpcs3 upstream uses, including the ccache-as-cl
-      # interception and the ci_only.targets shim.
+      # Build only the rpcs3 target. That still pulls emucore as a project
+      # dependency, but avoids the legacy rpcs3_test target, which links
+      # googletest from packages.config and is not needed for OEL packaging.
       - name: Compile rpcs3
         working-directory: SRC/GIT/rpcs3
         shell: pwsh
-        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\SRC\GIT\rpcs3\buildfiles\msvc\ci_only.targets"
+        run: msbuild rpcs3.sln /t:rpcs3 /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\SRC\GIT\rpcs3\buildfiles\msvc\ci_only.targets"
 
       - name: Pack up rpcs3 artifacts (upstream's deploy-windows.sh)
         working-directory: SRC/GIT/rpcs3

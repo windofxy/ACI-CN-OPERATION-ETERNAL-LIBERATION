@@ -125,9 +125,10 @@ if (-not (Test-Path $nugetExe)) {
 }
 Push-Location "SRC\GIT\rpcs3"
 # rpcs3_test pulls googletest via packages.config; msbuild /restore only handles
-# PackageReference style, so run nuget restore explicitly first.
+# PackageReference style, so run nuget restore explicitly first. OEL only needs
+# the rpcs3 target for packaging, so avoid building the test target entirely.
 & $nugetExe restore rpcs3.sln
-msbuild rpcs3.sln /p:Configuration=Release /p:Platform=x64 /v:minimal /m
+msbuild rpcs3.sln /t:rpcs3 /p:Configuration=Release /p:Platform=x64 /v:minimal /m
 Pop-Location
 
 # 5. Build RPCN
