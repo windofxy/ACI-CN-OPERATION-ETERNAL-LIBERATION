@@ -1,3 +1,28 @@
+diff --git a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
+index 13e4b0dd8..359ab0539 100644
+--- a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
++++ b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
+@@ -578,6 +578,20 @@ error_code cellSysutilCheckCallback(ppu_thread& ppu)
+ {
+ 	cellSysutil.trace("cellSysutilCheckCallback()");
+ 
++	// [FREEZE-DIAG] D1: rate-limited heartbeat. During a mid-mission freeze, if this
++	// keeps printing alongside the GetNetworkTime tail the frame loop is alive and
++	// callbacks are being delivered (motivating a callback-based fix). If it stops,
++	// the loop parked in a sub-call before returning here. At most once per second.
++	{
++		static atomic_t<u64> s_d1_last_ns{0};
++		const u64 now_ns = static_cast<u64>(
++			std::chrono::duration_cast<std::chrono::nanoseconds>(
++				steady_clock::now().time_since_epoch()).count());
++		const u64 prev = s_d1_last_ns.load();
++		if (now_ns - prev >= 1'000'000'000ull && s_d1_last_ns.compare_and_swap(prev, now_ns) == prev)
++			cellSysutil.notice("[FREEZE-DIAG] D1: CheckCallback pumping");
++	}
++
+ 	auto& cbm = g_fxo->get<sysutil_cb_manager>();
+ 
+ 	for (auto&& func : cbm.registered.pop_all())
 diff --git a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
 index ed32fa6bb..0da2a808f 100644
 --- a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
@@ -17,7 +42,7 @@ index ed32fa6bb..0da2a808f 100644
  					// Remove all remaining messages for this socket (send failed -> stream closed,
  					// or socket gone). data_mutex already held; cannot call clear_all_messages.
 diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
-index 4f6d283e7..5258f1f98 100644
+index 4f6d283e7..678d6f8a0 100644
 --- a/rpcs3/Emu/NP/signaling_handler.cpp
 +++ b/rpcs3/Emu/NP/signaling_handler.cpp
 @@ -425,7 +425,7 @@ void signaling_handler::operator()()

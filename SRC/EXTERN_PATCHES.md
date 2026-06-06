@@ -283,6 +283,10 @@ analysis of the game binary plus reproduction logs, not yet confirmed in-game. T
 correct on its own terms regardless - a getter should not report a
 connection that signaling has already declared inactive as still live.
 
+A [FREEZE-DIAG] D2 probe was added: edge-triggered notice per (room, member) when
+the getter returns CONN_NOT_FOUND for an INACTIVE peer, and again if that member
+subsequently flips back to ACTIVE (flap detection).
+
 ## RPCS3: `np-disconnect-handling.patch`
 
 Modifies `rpcs3/Emu/NP/np_cache.cpp`, `rpcs3/Emu/NP/signaling_handler.cpp`, and
@@ -318,6 +322,12 @@ since it is not a real teardown route for an established peer). Still open:
 `sceNpSignalingGetPeerNetInfoResult` is a stub that always returns `CELL_OK` - out of
 scope for disconnect handling, since the game tracks peer liveness via
 `GetConnectionInfo`, not the peer-net-info request/result flow.
+
+Two [FREEZE-DIAG] probes were added: D2 (non-matching2 sibling, keyed by conn_id)
+mirrors the matching2 D2 probe above; D3 logs once per (room, member) when
+`GetRoomMemberDataInternalLocal` succeeds for a member whose signaling is INACTIVE
+(confirms del_member never ran for that member -- the smoking gun for the synthesized
+MemberLeft fix path).
 
 ## RPCS3: `p2ps-disconnect-diagnostics.patch`
 
@@ -363,6 +373,10 @@ leaving is not reported as a fault, while an abnormal loss (timeout / link death
 `warning`. The npid matters for triage: a peer that drops silently never produces a
 `UserLeftRoom` (which is the only other line carrying the player name), so without it a
 frozen peer is only identifiable by member id.
+
+A [FREEZE-DIAG] D1 probe was added to `cellSysutil.cpp`
+(`cellSysutilCheckCallback`): emits a notice at most once per second to confirm the
+per-frame callback pump is still running during a hang.
 
 ## rpcn: `tss-server.patch`
 
