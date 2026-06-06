@@ -39,7 +39,7 @@ Source: "BIN\_app\assets\*";                       DestDir: "{app}\_app\assets";
 ; Embeddable Python runtime (bundled so first-run needs no download).
 ; Provisioned on the build machine by package.bat (via setup.bat); gitignored
 ; like the RPCS3 binaries. setup.bat stays as a runtime fallback if absent.
-Source: "BIN\_app\python\*";                       DestDir: "{app}\_app\python";     Flags: ignoreversion recursesubdirs
+Source: "BIN\_app\python\*";                       DestDir: "{app}\_app\python";     Flags: ignoreversion recursesubdirs; Excludes: "*\objects-*\*"
 
 ; Python modules
 Source: "BIN\_app\modules\*.py";                   DestDir: "{app}\_app\modules";    Flags: ignoreversion

@@ -43,6 +43,20 @@ if not exist "%ROOT%BIN\_app\python\pythonw.exe" (
     echo.
 )
 
+:: 0.5. Prune PySide6 build artifacts that are not needed at runtime.
+::      Some wheels ship deep qml/Qt/*/objects-* trees containing .obj files;
+::      on GitHub Actions their absolute paths can exceed Inno Setup's limit.
+set "PYSIDE_QML=%ROOT%BIN\_app\python\Lib\site-packages\PySide6\qml\Qt"
+if exist "!PYSIDE_QML!" (
+    echo [0.5/3] Pruning PySide6 build artifacts...
+    powershell -NoProfile -Command ^
+        "$root = '%PYSIDE_QML%'; " ^
+        "Get-ChildItem -Path $root -Directory -Recurse -Filter 'objects-*' -ErrorAction SilentlyContinue | " ^
+        "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue"
+    echo Done.
+    echo.
+)
+
 :: 1. Build installer
 echo [1/3] Building installer...
 "!ISCC!" "%ROOT%OEL.iss"
