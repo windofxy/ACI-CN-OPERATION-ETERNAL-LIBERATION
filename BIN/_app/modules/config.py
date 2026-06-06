@@ -106,8 +106,6 @@ def patch_game_config(cfg_path: str, lan_ip: str, bind_address: str = "", upnp: 
     content = re.sub(r"UPNP Enabled:.*",  f"UPNP Enabled: {'true' if upnp else 'false'}", content)
     content = re.sub(r"Bind address:.*",
                      f"Bind address: {bind_address or '0.0.0.0'}", content)
-    content = re.sub(r"Frame limit:.*", "Frame limit: 30", content)
-
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(content)
 
