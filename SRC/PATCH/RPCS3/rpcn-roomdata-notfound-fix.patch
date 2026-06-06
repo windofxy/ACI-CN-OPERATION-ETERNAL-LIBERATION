@@ -1,0 +1,36 @@
+diff --git a/rpcs3/Emu/NP/np_requests.cpp b/rpcs3/Emu/NP/np_requests.cpp
+index d9dd6dc..762f6f2 100644
+--- a/rpcs3/Emu/NP/np_requests.cpp
++++ b/rpcs3/Emu/NP/np_requests.cpp
+@@ -522,6 +522,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		case rpcn::ErrorType::Unauthorized: error_code = SCE_NP_MATCHING2_SERVER_ERROR_FORBIDDEN; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SetRoomDataExternal: %s", error);
+ 		}
+@@ -555,6 +556,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to GetRoomDataInternal: %s", error);
+ 		}
+ 
+@@ -611,6 +613,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SetRoomDataInternal: %s", error);
+ 		}
+ 
+@@ -807,6 +810,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		case rpcn::ErrorType::Unauthorized: error_code = SCE_NP_MATCHING2_SERVER_ERROR_FORBIDDEN; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SendRoomMessage: %s", error);
+ 		}
