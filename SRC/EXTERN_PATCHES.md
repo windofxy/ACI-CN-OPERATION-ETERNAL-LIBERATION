@@ -378,6 +378,32 @@ A [FREEZE-DIAG] D1 probe was added to `cellSysutil.cpp`
 (`cellSysutilCheckCallback`): emits a notice at most once per second to confirm the
 per-frame callback pump is still running during a hang.
 
+## RPCS3: `p2ps-disconnect-deadlock-fix.patch`
+
+Modifies `rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp`. Applies after
+`p2ps-disconnect-fix.patch` and `p2ps-disconnect-diagnostics.patch` (it edits the same
+`tcp_timeout_monitor::operator()` teardown those add).
+
+`tcp_timeout_monitor::operator()` holds the monitor's global `data_mutex` while iterating
+the retry map. On the retry cap and on a send failure it called
+`force_disconnect_by_addr` (which takes the signaling `data_mutex`, then a match2 context
+mutex and the sysutil queue) and `close_stream()` (which takes the per-socket `mutex`) with
+`data_mutex` still held. The packet path takes those locks in the opposite order:
+`handle_connected` holds the socket `mutex` and then calls `confirm_data_received`, which
+takes `data_mutex`. Because `data_mutex` is a single instance shared by every P2P socket,
+any concurrent `handle_connected` (or a guest `sendto`/`recvfrom` taking a socket `mutex`)
+against the retry-cap teardown is an AB/BA deadlock; the parked threads stall the frame and
+callback pump.
+
+The patch defers the teardown out of the locked region. Inside the loop it only records the
+dead peer (`sock_id`, `addr`, `port`) and erases that socket's queued messages while
+`data_mutex` is held; the lock is released, then `force_disconnect_by_addr` and
+`close_stream()` run for each recorded peer. No path now takes a socket `mutex` while
+holding `data_mutex`, so the two acquisition orders can no longer cross. The send-failure
+case also gains the signaling `INACTIVE` dispatch that previously only the retry cap had.
+
+Credit: [VF0S-D](https://github.com/VF0S-D)
+
 ## rpcn: `tss-server.patch`
 
 Modifies `src/server.rs` and `servers.cfg`, and adds `src/server/tss_server.rs`.
