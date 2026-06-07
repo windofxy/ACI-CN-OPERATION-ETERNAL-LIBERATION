@@ -1,8 +1,16 @@
 diff --git a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
-index 13e4b0dd8..359ab0539 100644
+index 13e4b0dd8..ebaf50ae0 100644
 --- a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
 +++ b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
-@@ -578,6 +578,20 @@ error_code cellSysutilCheckCallback(ppu_thread& ppu)
+@@ -12,6 +12,7 @@
+ 
+ #include "Utilities/StrUtil.h"
+ #include "Utilities/lockless.h"
++#include "Emu/NP/np_handler.h"
+ 
+ #include <span>
+ #include <deque>
+@@ -578,6 +579,59 @@ error_code cellSysutilCheckCallback(ppu_thread& ppu)
  {
  	cellSysutil.trace("cellSysutilCheckCallback()");
  
@@ -18,6 +26,45 @@ index 13e4b0dd8..359ab0539 100644
 +		const u64 prev = s_d1_last_ns.load();
 +		if (now_ns - prev >= 1'000'000'000ull && s_d1_last_ns.compare_and_swap(prev, now_ns) == prev)
 +			cellSysutil.notice("[FREEZE-DIAG] D1: CheckCallback pumping");
++	}
++
++	// [FREEZE-DIAG] D5: one-shot snapshot when NP goes silent for >8s while this pump
++	// stays alive. Captures pending matching2 requests and room_event_cb state to
++	// identify what the game is waiting on.
++	{
++		static atomic_t<u32> s_d5_latched{0};
++		const u64 now_ns = static_cast<u64>(
++			std::chrono::duration_cast<std::chrono::nanoseconds>(
++				steady_clock::now().time_since_epoch()).count());
++		const u64 last = np::np_handler::last_np_progress_ns();
++		if (last != 0)
++		{
++			const bool stalled = (now_ns - last >= 8'000'000'000ull);
++			if (!stalled)
++			{
++				// Re-arm so a later freeze fires again
++				s_d5_latched.store(0);
++			}
++			else if (s_d5_latched.compare_and_swap(0, 1) == 0)
++			{
++				cellSysutil.notice("[FREEZE-DIAG] D5: NP stalled >8s, pump alive; snapshot follows");
++				auto& nph = g_fxo->get<named_thread<np::np_handler>>();
++				const auto reqs = nph.get_pending_requests_snapshot();
++				if (reqs.empty())
++				{
++					cellSysutil.notice("[FREEZE-DIAG] D5: no pending matching2 requests");
++				}
++				else
++				{
++					for (const auto& [req_id, event_type, submitted_ns] : reqs)
++					{
++						const u64 age_ms = submitted_ns ? (now_ns - submitted_ns) / 1'000'000u : 0u;
++						cellSysutil.notice("[FREEZE-DIAG] D5: pending req_id=0x%x event_type=0x%x age_ms=%llu", req_id, event_type, age_ms);
++					}
++				}
++				cellSysutil.notice("[FREEZE-DIAG] D5: room_event_cb %s", nph.has_room_event_cb() ? "registered" : "null");
++			}
++		}
 +	}
 +
  	auto& cbm = g_fxo->get<sysutil_cb_manager>();
@@ -41,6 +88,179 @@ index ed32fa6bb..0da2a808f 100644
  					it = msgs.erase(it);
  					// Remove all remaining messages for this socket (send failed -> stream closed,
  					// or socket gone). data_mutex already held; cannot call clear_all_messages.
+diff --git a/rpcs3/Emu/NP/np_handler.cpp b/rpcs3/Emu/NP/np_handler.cpp
+index 0d628e299..94e2cbafd 100644
+--- a/rpcs3/Emu/NP/np_handler.cpp
++++ b/rpcs3/Emu/NP/np_handler.cpp
+@@ -55,6 +55,9 @@ LOG_CHANNEL(rpcn_log, "rpcn");
+ LOG_CHANNEL(nph_log, "NPHandler");
+ LOG_CHANNEL(ticket_log, "Ticket");
+ 
++// [FREEZE-DIAG] shared NP-progress timestamp; bumped on every matching2 request submit/complete and room event enqueue
++static atomic_t<u64> g_np_progress_ns{0};
++
+ namespace np
+ {
+ 	std::string get_players_history_path()
+@@ -1318,12 +1321,17 @@ namespace np
+ 
+ 		const u32 req_id = get_req_id(optParam ? optParam->appReqId : ctx->default_match2_optparam.appReqId);
+ 
++		const u64 now_ns = static_cast<u64>(
++			std::chrono::duration_cast<std::chrono::nanoseconds>(
++				steady_clock::now().time_since_epoch()).count());
++
+ 		callback_info ret{
+ 			.ctx_id = ctx_id,
+ 			.cb = (optParam && optParam->cbFunc) ? optParam->cbFunc : ctx->default_match2_optparam.cbFunc,
+ 			.cb_arg = (optParam && optParam->cbFuncArg) ? optParam->cbFuncArg : ctx->default_match2_optparam.cbFuncArg,
+ 			.event_type = event_type,
+ 			.abortable = abortable,
++			.submitted_ns = now_ns,
+ 		};
+ 
+ 		nph_log.trace("Callback used is 0x%x with req_id %d", ret.cb, req_id);
+@@ -1333,6 +1341,8 @@ namespace np
+ 			pending_requests[req_id] = std::move(ret);
+ 		}
+ 
++		g_np_progress_ns.store(now_ns);
++
+ 		return req_id;
+ 	}
+ 
+@@ -1346,6 +1356,8 @@ namespace np
+ 		const auto cb_info = std::move(::at32(pending_requests, req_id));
+ 		pending_requests.erase(req_id);
+ 
++		note_progress(); // [FREEZE-DIAG] reply arrived = NP progress
++
+ 		return cb_info;
+ 	}
+ 
+@@ -1367,6 +1379,30 @@ namespace np
+ 		return CELL_OK;
+ 	}
+ 
++	// [FREEZE-DIAG] bump g_np_progress_ns to the current steady_clock nanosecond count
++	void np_handler::note_progress()
++	{
++		const u64 now_ns = static_cast<u64>(
++			std::chrono::duration_cast<std::chrono::nanoseconds>(
++				steady_clock::now().time_since_epoch()).count());
++		g_np_progress_ns.store(now_ns);
++	}
++
++	u64 np_handler::last_np_progress_ns()
++	{
++		return g_np_progress_ns.load();
++	}
++
++	std::vector<std::tuple<u32, u32, u64>> np_handler::get_pending_requests_snapshot()
++	{
++		std::vector<std::tuple<u32, u32, u64>> result;
++		reader_lock lock(mutex_pending_requests);
++		result.reserve(pending_requests.size());
++		for (const auto& [req_id, ci] : pending_requests)
++			result.emplace_back(req_id, static_cast<u32>(ci.event_type), ci.submitted_ns);
++		return result;
++	}
++
+ 	event_data& np_handler::allocate_req_result(u32 event_key, u32 max_size, u32 initial_size)
+ 	{
+ 		std::lock_guard lock(mutex_match2_req_results);
+diff --git a/rpcs3/Emu/NP/np_handler.h b/rpcs3/Emu/NP/np_handler.h
+index 575fe6894..085485b93 100644
+--- a/rpcs3/Emu/NP/np_handler.h
++++ b/rpcs3/Emu/NP/np_handler.h
+@@ -3,6 +3,8 @@
+ #include <queue>
+ #include <map>
+ #include <unordered_map>
++#include <tuple>
++#include <vector>
+ #include <condition_variable>
+ 
+ #include "Emu/Memory/vm_ptr.h"
+@@ -266,6 +268,11 @@ namespace np
+ 		SceNpMatching2MemoryInfo get_memory_info() const;
+ 		error_code abort_request(u32 req_id);
+ 
++		// [FREEZE-DIAG] accessors used by D4/D5 probes
++		bool has_room_event_cb() const { return !!room_event_cb; }
++		std::vector<std::tuple<u32, u32, u64>> get_pending_requests_snapshot();
++		static u64 last_np_progress_ns();
++
+ 		// For signaling
+ 		void req_sign_infos(const std::string& npid, u32 conn_id);
+ 
+@@ -366,6 +373,9 @@ namespace np
+ 		void reply_quickmatch_gui(u32 req_id, rpcn::ErrorType error, vec_stream& reply);
+ 		void reply_searchjoin_gui(u32 req_id, rpcn::ErrorType error, vec_stream& reply);
+ 
++		// [FREEZE-DIAG] bump the shared NP-progress timestamp (called on submit/complete/event)
++		static void note_progress();
++
+ 		// Helper functions
+ 		std::pair<bool, bool> get_match2_context_options(u32 ctx_id);
+ 		void handle_GetScoreResponse(u32 req_id, rpcn::ErrorType error, vec_stream& reply, bool simple_result = false);
+@@ -381,6 +391,7 @@ namespace np
+ 			vm::ptr<void> cb_arg;
+ 			SceNpMatching2Event event_type;
+ 			bool abortable;
++			u64 submitted_ns = 0; // [FREEZE-DIAG] submission timestamp (steady_clock ns)
+ 
+ 			void queue_callback(u32 req_id, u32 event_key, s32 error_code, u32 data_size) const;
+ 		};
+diff --git a/rpcs3/Emu/NP/np_notifications.cpp b/rpcs3/Emu/NP/np_notifications.cpp
+index 9b64882f0..f97fd2c51 100644
+--- a/rpcs3/Emu/NP/np_notifications.cpp
++++ b/rpcs3/Emu/NP/np_notifications.cpp
+@@ -64,6 +64,8 @@ namespace np
+ 
+ 		if (room_event_cb)
+ 		{
++			rpcn_log.notice("[FREEZE-DIAG] D4: room event 0x%x room(%d) member(%d) enqueued", static_cast<u32>(SCE_NP_MATCHING2_ROOM_EVENT_MemberJoined), room_id, notif_data->roomMemberDataInternal->memberId);
++			np_handler::note_progress();
+ 			sysutil_register_cb([room_event_cb = this->room_event_cb, room_id, event_key, room_event_cb_ctx = this->room_event_cb_ctx, room_event_cb_arg = this->room_event_cb_arg, size = edata.size()](ppu_thread& cb_ppu) -> s32
+ 				{
+ 					room_event_cb(cb_ppu, room_event_cb_ctx, room_id, SCE_NP_MATCHING2_ROOM_EVENT_MemberJoined, event_key, 0, size, room_event_cb_arg);
+@@ -103,6 +105,8 @@ namespace np
+ 
+ 		if (room_event_cb)
+ 		{
++			rpcn_log.notice("[FREEZE-DIAG] D4: room event 0x%x room(%d) member(%d) enqueued", static_cast<u32>(SCE_NP_MATCHING2_ROOM_EVENT_MemberLeft), room_id, notif_data->roomMemberDataInternal->memberId);
++			np_handler::note_progress();
+ 			sysutil_register_cb([room_event_cb = this->room_event_cb, room_event_cb_ctx = this->room_event_cb_ctx, room_id, event_key, room_event_cb_arg = this->room_event_cb_arg, size = edata.size()](ppu_thread& cb_ppu) -> s32
+ 				{
+ 					room_event_cb(cb_ppu, room_event_cb_ctx, room_id, SCE_NP_MATCHING2_ROOM_EVENT_MemberLeft, event_key, 0, size, room_event_cb_arg);
+@@ -136,6 +140,8 @@ namespace np
+ 
+ 		if (room_event_cb)
+ 		{
++			rpcn_log.notice("[FREEZE-DIAG] D4: room event 0x%x room(%d) enqueued", static_cast<u32>(SCE_NP_MATCHING2_ROOM_EVENT_RoomDestroyed), room_id);
++			np_handler::note_progress();
+ 			sysutil_register_cb([room_event_cb = this->room_event_cb, room_event_cb_ctx = this->room_event_cb_ctx, room_id, event_key, room_event_cb_arg = this->room_event_cb_arg, size = edata.size()](ppu_thread& cb_ppu) -> s32
+ 				{
+ 					room_event_cb(cb_ppu, room_event_cb_ctx, room_id, SCE_NP_MATCHING2_ROOM_EVENT_RoomDestroyed, event_key, 0, size, room_event_cb_arg);
+@@ -171,6 +177,8 @@ namespace np
+ 
+ 		if (room_event_cb)
+ 		{
++			rpcn_log.notice("[FREEZE-DIAG] D4: room event 0x%x room(%d) enqueued", static_cast<u32>(SCE_NP_MATCHING2_ROOM_EVENT_UpdatedRoomDataInternal), room_id);
++			np_handler::note_progress();
+ 			sysutil_register_cb([room_event_cb = this->room_event_cb, room_event_cb_ctx = this->room_event_cb_ctx, room_id, event_key, room_event_cb_arg = this->room_event_cb_arg, size = edata.size()](ppu_thread& cb_ppu) -> s32
+ 				{
+ 					room_event_cb(cb_ppu, room_event_cb_ctx, room_id, SCE_NP_MATCHING2_ROOM_EVENT_UpdatedRoomDataInternal, event_key, 0, size, room_event_cb_arg);
+@@ -209,6 +217,8 @@ namespace np
+ 
+ 		if (room_event_cb)
+ 		{
++			rpcn_log.notice("[FREEZE-DIAG] D4: room event 0x%x room(%d) member(%d) enqueued", static_cast<u32>(SCE_NP_MATCHING2_ROOM_EVENT_UpdatedRoomMemberDataInternal), room_id, notif_data->newRoomMemberDataInternal->memberId);
++			np_handler::note_progress();
+ 			sysutil_register_cb([room_event_cb = this->room_event_cb, room_event_cb_ctx = this->room_event_cb_ctx, room_id, event_key, room_event_cb_arg = this->room_event_cb_arg, size = edata.size()](ppu_thread& cb_ppu) -> s32
+ 				{
+ 					room_event_cb(cb_ppu, room_event_cb_ctx, room_id, SCE_NP_MATCHING2_ROOM_EVENT_UpdatedRoomMemberDataInternal, event_key, 0, size, room_event_cb_arg);
 diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
 index 4f6d283e7..678d6f8a0 100644
 --- a/rpcs3/Emu/NP/signaling_handler.cpp

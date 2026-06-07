@@ -30,7 +30,7 @@ index 03bc8c4c3..14ba05e62 100644
  	{
  		case SCE_NP_SIGNALING_CONN_INFO_RTT:
 diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
-index 2f8b02a27..82d94cca5 100644
+index 2f8b02a27..8c72208b6 100644
 --- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
 +++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
 @@ -1091,7 +1091,37 @@ error_code sceNpMatching2GetRoomMemberDataInternalLocal(SceNpMatching2ContextId
@@ -40,7 +40,7 @@ index 2f8b02a27..82d94cca5 100644
 -	return nph.local_get_room_member_data(roomId, memberId, binattrs_list, member ? member.get_ptr() : nullptr, buf.addr(), bufLen, ctxId);
 +	const error_code res = nph.local_get_room_member_data(roomId, memberId, binattrs_list, member ? member.get_ptr() : nullptr, buf.addr(), bufLen, ctxId);
 +
-+	// [FREEZE-DIAG] D3: smoking-gun probe. FUN_0074e210 calls this getter first and bails
++	// [FREEZE-DIAG] D3: smoking-gun probe. The game calls this getter first and bails
 +	// if it fails. If it SUCCEEDS while signaling is INACTIVE for that member, del_member
 +	// never ran (no MemberLeft arrived), the np_cache still holds the member, and the
 +	// game loop cannot detect the drop via this early-bail path -- motivating synthesized
