@@ -1,20 +1,77 @@
 diff --git a/rpcs3/Emu/Cell/Modules/sceNp.cpp b/rpcs3/Emu/Cell/Modules/sceNp.cpp
-index e82491eac..be65a47df 100644
+index 03bc8c4c3..14ba05e62 100644
 --- a/rpcs3/Emu/Cell/Modules/sceNp.cpp
 +++ b/rpcs3/Emu/Cell/Modules/sceNp.cpp
-@@ -6908,6 +6908,12 @@ error_code sceNpSignalingGetConnectionInfo(u32 ctx_id, u32 conn_id, s32 code, vm
+@@ -6908,6 +6908,26 @@ error_code sceNpSignalingGetConnectionInfo(u32 ctx_id, u32 conn_id, s32 code, vm
  	if (!si)
  		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
  
 +	// A peer whose signaling connection has gone INACTIVE (P2PS timeout etc.) keeps its
 +	// si until cleanup; reporting stale connection info for it hides the disconnect from
 +	// titles that poll this getter. Mirror the matching2 variant and report it gone.
-+	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
-+		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
++	// [FREEZE-DIAG] D2: edge-triggered per conn_id. Logs once when the getter returns
++	// CONN_NOT_FOUND for an INACTIVE peer; also logs once if it flips back to ACTIVE
++	// (catches a flapping reconnect). Non-matching2 variant: keyed by conn_id.
++	{
++		static shared_mutex s_d2np_mtx;
++		static std::set<u32> s_d2np_inactive_seen;
++		std::lock_guard lock(s_d2np_mtx);
++		if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++		{
++			if (s_d2np_inactive_seen.emplace(conn_id).second)
++				sceNp.notice("[FREEZE-DIAG] D2: GetConnectionInfo (non-match2) returning CONN_NOT_FOUND for INACTIVE conn_id %d", conn_id);
++			return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
++		}
++		if (s_d2np_inactive_seen.erase(conn_id))
++			sceNp.notice("[FREEZE-DIAG] D2: GetConnectionInfo (non-match2) conn_id %d flipped back to ACTIVE (was INACTIVE)", conn_id);
++	}
 +
  	switch (code)
  	{
  		case SCE_NP_SIGNALING_CONN_INFO_RTT:
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+index 2f8b02a27..8c72208b6 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+@@ -1091,7 +1091,37 @@ error_code sceNpMatching2GetRoomMemberDataInternalLocal(SceNpMatching2ContextId
+ 		return SCE_NP_MATCHING2_ERROR_CONTEXT_NOT_FOUND;
+ 	}
+ 
+-	return nph.local_get_room_member_data(roomId, memberId, binattrs_list, member ? member.get_ptr() : nullptr, buf.addr(), bufLen, ctxId);
++	const error_code res = nph.local_get_room_member_data(roomId, memberId, binattrs_list, member ? member.get_ptr() : nullptr, buf.addr(), bufLen, ctxId);
++
++	// [FREEZE-DIAG] D3: smoking-gun probe. The game calls this getter first and bails
++	// if it fails. If it SUCCEEDS while signaling is INACTIVE for that member, del_member
++	// never ran (no MemberLeft arrived), the np_cache still holds the member, and the
++	// game loop cannot detect the drop via this early-bail path -- motivating synthesized
++	// MemberLeft as the fix layer. Edge-triggered per (room, member) to avoid spam.
++	if (!res)
++	{
++		auto [npid_res, npid] = nph.local_get_npid(roomId, memberId);
++		if (!npid_res)
++		{
++			auto& sigh = g_fxo->get<named_thread<signaling_handler>>();
++			const auto conn_id_opt = sigh.get_conn_id_from_npid(*npid);
++			if (conn_id_opt)
++			{
++				const auto si = sigh.get_sig_infos(*conn_id_opt);
++				if (si && si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++				{
++					using room_member_key = std::pair<SceNpMatching2RoomId, SceNpMatching2RoomMemberId>;
++					static shared_mutex s_d3_mtx;
++					static std::set<room_member_key> s_d3_seen;
++					std::lock_guard lock(s_d3_mtx);
++					if (s_d3_seen.emplace(roomId, memberId).second)
++						sceNp2.notice("[FREEZE-DIAG] D3: GetRoomMemberDataInternalLocal succeeded for INACTIVE member(%d) of room(%d) -- del_member never ran", memberId, roomId);
++				}
++			}
++		}
++	}
++
++	return res;
+ }
+ 
+ error_code sceNpMatching2GetCbQueueInfo(SceNpMatching2ContextId ctxId, vm::ptr<SceNpMatching2CbQueueInfo> queueInfo)
 diff --git a/rpcs3/Emu/NP/np_cache.cpp b/rpcs3/Emu/NP/np_cache.cpp
 index 4d70cacaa..c072cd797 100644
 --- a/rpcs3/Emu/NP/np_cache.cpp
@@ -40,7 +97,7 @@ index 4d70cacaa..c072cd797 100644
  	}
  
 diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
-index a4c59763c..a3ff348b6 100644
+index 19ae4e4e7..4f6d283e7 100644
 --- a/rpcs3/Emu/NP/signaling_handler.cpp
 +++ b/rpcs3/Emu/NP/signaling_handler.cpp
 @@ -592,6 +592,9 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3

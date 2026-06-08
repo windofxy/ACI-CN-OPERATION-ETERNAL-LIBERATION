@@ -97,7 +97,7 @@ def _check_spki_pin(der_cert: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 class _Scrubber:
-    def __init__(self, app_root: str):
+    def __init__(self, app_root: str, version: str = ""):
         import getpass
         user = re.escape(getpass.getuser())
         # Windows home path: C:\Users\<name>\  ->  C:\Users\<user>\
@@ -109,6 +109,7 @@ class _Scrubber:
         self._app_re = (
             re.compile(re.escape(app_root), re.IGNORECASE) if app_root else None
         )
+        self._version = version or None
         self._ip_cache: dict[str, str] = {}
 
     def scrub(self, line: str) -> str:
@@ -116,8 +117,12 @@ class _Scrubber:
             line = pat.sub(repl, line)
         if self._app_re:
             line = self._app_re.sub("<app>", line)
-        line = _IP_RE.sub(lambda m: _pseudo_ip(m.group(1), self._ip_cache), line)
-        return line
+        repl = lambda m: _pseudo_ip(m.group(1), self._ip_cache)
+        if self._version and self._version in line:
+            return self._version.join(
+                _IP_RE.sub(repl, seg) for seg in line.split(self._version)
+            )
+        return _IP_RE.sub(repl, line)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +154,7 @@ class TelemetryStreamer(threading.Thread):
     # ------------------------------------------------------------------
 
     def _scrubber(self) -> _Scrubber:
-        return _Scrubber(self._meta.get("app_root", ""))
+        return _Scrubber(self._meta.get("app_root", ""), self._meta.get("version", ""))
 
     def _post(self, data: bytes, seq: int, final: bool = False):
         headers = {

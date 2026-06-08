@@ -283,6 +283,10 @@ analysis of the game binary plus reproduction logs, not yet confirmed in-game. T
 correct on its own terms regardless - a getter should not report a
 connection that signaling has already declared inactive as still live.
 
+A [FREEZE-DIAG] D2 probe was added: edge-triggered notice per (room, member) when
+the getter returns CONN_NOT_FOUND for an INACTIVE peer, and again if that member
+subsequently flips back to ACTIVE (flap detection).
+
 ## RPCS3: `np-disconnect-handling.patch`
 
 Modifies `rpcs3/Emu/NP/np_cache.cpp`, `rpcs3/Emu/NP/signaling_handler.cpp`, and
@@ -318,6 +322,12 @@ since it is not a real teardown route for an established peer). Still open:
 `sceNpSignalingGetPeerNetInfoResult` is a stub that always returns `CELL_OK` - out of
 scope for disconnect handling, since the game tracks peer liveness via
 `GetConnectionInfo`, not the peer-net-info request/result flow.
+
+Two [FREEZE-DIAG] probes were added: D2 (non-matching2 sibling, keyed by conn_id)
+mirrors the matching2 D2 probe above; D3 logs once per (room, member) when
+`GetRoomMemberDataInternalLocal` succeeds for a member whose signaling is INACTIVE
+(confirms del_member never ran for that member -- the smoking gun for the synthesized
+MemberLeft fix path).
 
 ## RPCS3: `p2ps-disconnect-diagnostics.patch`
 
@@ -363,6 +373,36 @@ leaving is not reported as a fault, while an abnormal loss (timeout / link death
 `warning`. The npid matters for triage: a peer that drops silently never produces a
 `UserLeftRoom` (which is the only other line carrying the player name), so without it a
 frozen peer is only identifiable by member id.
+
+A [FREEZE-DIAG] D1 probe was added to `cellSysutil.cpp`
+(`cellSysutilCheckCallback`): emits a notice at most once per second to confirm the
+per-frame callback pump is still running during a hang.
+
+## RPCS3: `p2ps-disconnect-deadlock-fix.patch`
+
+Modifies `rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp`. Applies after
+`p2ps-disconnect-fix.patch` and `p2ps-disconnect-diagnostics.patch` (it edits the same
+`tcp_timeout_monitor::operator()` teardown those add).
+
+`tcp_timeout_monitor::operator()` holds the monitor's global `data_mutex` while iterating
+the retry map. On the retry cap and on a send failure it called
+`force_disconnect_by_addr` (which takes the signaling `data_mutex`, then a match2 context
+mutex and the sysutil queue) and `close_stream()` (which takes the per-socket `mutex`) with
+`data_mutex` still held. The packet path takes those locks in the opposite order:
+`handle_connected` holds the socket `mutex` and then calls `confirm_data_received`, which
+takes `data_mutex`. Because `data_mutex` is a single instance shared by every P2P socket,
+any concurrent `handle_connected` (or a guest `sendto`/`recvfrom` taking a socket `mutex`)
+against the retry-cap teardown is an AB/BA deadlock; the parked threads stall the frame and
+callback pump.
+
+The patch defers the teardown out of the locked region. Inside the loop it only records the
+dead peer (`sock_id`, `addr`, `port`) and erases that socket's queued messages while
+`data_mutex` is held; the lock is released, then `force_disconnect_by_addr` and
+`close_stream()` run for each recorded peer. No path now takes a socket `mutex` while
+holding `data_mutex`, so the two acquisition orders can no longer cross. The send-failure
+case also gains the signaling `INACTIVE` dispatch that previously only the retry cap had.
+
+Credit: [VF0S-D](https://github.com/VF0S-D)
 
 ## rpcn: `tss-server.patch`
 
