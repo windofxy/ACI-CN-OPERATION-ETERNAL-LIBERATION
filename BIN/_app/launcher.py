@@ -39,13 +39,27 @@ RPCN_DIR    = APP_DIR / "rpcn"
 GAMESERVER_DIR = APP_DIR / "gameserver"
 PATCHES_DIR = APP_DIR / "patches"
 PYTHON_EXE  = APP_DIR / "python" / "python.exe" if _IS_WIN else APP_DIR / "python" / "bin" / "python3"
-RPCS3_EXE   = RPCS3_DIR / f"rpcs3{_EXE}"
+
+
+def _resolve_rpcs3_exe() -> Path:
+    if _IS_WIN:
+        return RPCS3_DIR / "rpcs3.exe"
+    images = sorted(RPCS3_DIR.glob("*.AppImage"))
+    if images:
+        return images[0]
+    return RPCS3_DIR / "rpcs3"
+
+
+RPCS3_EXE   = _resolve_rpcs3_exe()
 RPCN_EXE    = RPCN_DIR / f"rpcn{_EXE}"
 GAMESERVER_SCRIPT = GAMESERVER_DIR / "opeternal_listener.py"
 GAMESERVER_LOG    = GAMESERVER_DIR / "gameserver.log"
 PORTABLE_DIR = RPCS3_DIR / "portable"
-RPCN_YML    = PORTABLE_DIR / "config" / "rpcn.yml"
-CUSTOM_CFG  = PORTABLE_DIR / "config" / "custom_configs" / "config_NPUB31347.yml"
+# RPCS3 keeps yml configs in a config/ subdirectory only on Windows; elsewhere
+# they sit directly in the portable dir (fs::get_config_dir).
+RPCS3_CFG_DIR = PORTABLE_DIR / "config" if _IS_WIN else PORTABLE_DIR
+RPCN_YML    = RPCS3_CFG_DIR / "rpcn.yml"
+CUSTOM_CFG  = RPCS3_CFG_DIR / "custom_configs" / "config_NPUB31347.yml"
 TSS_SRC_DIR = ROOT_DIR / "TSS"
 RPCS3_TSS   = PORTABLE_DIR / "tss"
 RPCN_TSS    = RPCN_DIR / "tss_data" / "NPWR04428_00"
@@ -62,6 +76,53 @@ TELEMETRY_URL        = "https://oel-telemetry.killerbyte.xyz"
 FIRMWARE_INDICATOR = PORTABLE_DIR / "dev_flash" / "sys" / "external" / "libsre.sprx"
 GAME_INDICATOR     = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "PARAM.SFO"
 GAME_USRDIR        = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "USRDIR"
+
+
+def rpcs3_launch_args() -> list:
+    """Extra RPCS3 argv. AppImages need FUSE; without it, fall back to
+    --appimage-extract-and-run (handled by the AppImage runtime itself)."""
+    if _IS_WIN or RPCS3_EXE.suffix != ".AppImage":
+        return []
+    if Path("/dev/fuse").exists() and (shutil.which("fusermount3") or shutil.which("fusermount")):
+        return []
+    return ["--appimage-extract-and-run"]
+
+
+def rpcs3_log_path() -> Path:
+    """RPCS3.log location. fs::get_log_dir is the config dir on Windows but the
+    cache dir on Linux, which ignores portable mode."""
+    if _IS_WIN:
+        return PORTABLE_DIR / "log" / "RPCS3.log"
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.environ.get("HOME", "."), ".cache")
+    return Path(cache) / "rpcs3" / "RPCS3.log"
+
+
+def gameserver_python() -> Path:
+    """Interpreter for the game server. On Linux this is a dedicated copy of
+    the bundled python so cap_net_bind_service (ports 80/443) is granted to it
+    alone, never to the GUI interpreter."""
+    if not _IS_WIN:
+        cand = APP_DIR / "python" / "bin" / "python3-gameserver"
+        if cand.exists():
+            return cand
+    return Path(PYTHON_EXE)
+
+
+def privileged_port_help() -> str:
+    """Actionable message for the Linux <1024 port restriction (ports 80/443)."""
+    py = gameserver_python()
+    msg = ("The game server must listen on ports 80 and 443, which Linux "
+           "reserves for privileged processes.\n\n")
+    if py.name == "python3-gameserver":
+        msg += ("Run this once in a terminal, then launch again:\n\n"
+                f"sudo setcap cap_net_bind_service=+ep '{py}'")
+    else:
+        msg += ("Run this once in a terminal, then launch again:\n\n"
+                "sudo sysctl net.ipv4.ip_unprivileged_port_start=80\n\n"
+                "To make it permanent:\n"
+                "echo net.ipv4.ip_unprivileged_port_start=80 | "
+                "sudo tee /etc/sysctl.d/99-opeternal.conf")
+    return msg
 
 # Modules live next to this file
 sys.path.insert(0, str(APP_DIR))
@@ -87,6 +148,7 @@ _DEFAULTS = {
     "telemetry_client_id": "",
     "auto_check_updates": RELEASE_CHANNEL == "experimental",
     "update_channel": RELEASE_CHANNEL,
+    "desktop_shortcut_offered": False,   # Linux only; installer covers Windows
 }
 
 def load_settings() -> dict:
@@ -163,12 +225,13 @@ class LaunchWorker(QThread):
             self.log.emit(f"TSS: {n}/15 files copied.")
 
             self.log.emit("Deploying patches...")
-            cfg_mod.deploy_patches(str(RPCS3_DIR), str(PATCHES_DIR))
+            cfg_mod.deploy_patches(str(RPCS3_DIR), str(RPCS3_CFG_DIR), str(PATCHES_DIR))
             cfg_mod.install_gui_assets(str(RPCS3_DIR), str(PATCHES_DIR))
 
             self.log.emit("Configuring RPCS3...")
             ok = cfg_mod.ensure_custom_config(
-                str(RPCS3_DIR), str(RPCS3_EXE),
+                str(RPCS3_DIR), str(RPCS3_CFG_DIR), str(RPCS3_EXE),
+                extra_args=rpcs3_launch_args(),
                 progress_cb=lambda m: self.log.emit(m),
             )
             if not ok:
@@ -1429,6 +1492,40 @@ class ACILauncher(QMainWindow):
         if self._settings.get("auto_check_updates"):
             QTimer.singleShot(1500, self._check_for_updates_startup)
 
+        if not _IS_WIN and not self._settings.get("desktop_shortcut_offered"):
+            QTimer.singleShot(1200, self._offer_desktop_shortcut)
+
+    def _offer_desktop_shortcut(self):
+        """One-time Linux equivalent of the installer's desktop shortcut."""
+        self._settings["desktop_shortcut_offered"] = True
+        save_settings(self._settings)
+        play = ROOT_DIR / "Play OPERATION ETERNAL LIBERATION (Linux).sh"
+        if not play.exists():
+            return
+        if QMessageBox.question(
+                self, "Application menu entry",
+                "Add OPERATION ETERNAL LIBERATION to your application menu?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        apps_dir = Path(os.environ.get("XDG_DATA_HOME")
+                        or os.path.join(os.environ.get("HOME", "."), ".local", "share")) / "applications"
+        try:
+            apps_dir.mkdir(parents=True, exist_ok=True)
+            (apps_dir / "operation-eternal-liberation.desktop").write_text(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=OPERATION ETERNAL LIBERATION\n"
+                "Comment=Community multiplayer launcher\n"
+                f'Exec="{play}"\n'
+                f'Path={ROOT_DIR}\n'
+                "Terminal=false\n"
+                "Categories=Game;\n",
+                encoding="utf-8",
+            )
+        except OSError as e:
+            QMessageBox.warning(self, "Application menu entry",
+                                f"Could not create the menu entry: {e}")
+
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -1556,8 +1653,13 @@ class ACILauncher(QMainWindow):
             ]
 
         if not processes.is_port_open(swap_ip):
+            gs_python = gameserver_python()
+            if not _IS_WIN and processes.needs_port_privilege(str(gs_python), swap_ip):
+                QMessageBox.critical(self, "Game server ports", privileged_port_help())
+                self._play_tab.set_launch_enabled(True)
+                return
             ok = self._gameserver.launch(
-                str(PYTHON_EXE),
+                str(gs_python),
                 gs_args,
                 cwd=str(GAMESERVER_DIR),
                 new_console=True,
@@ -1574,13 +1676,13 @@ class ACILauncher(QMainWindow):
             if not self._restore_staged:
                 tus_saves.cleanup_restore_sentinels(str(PORTABLE_DIR / "tus"))
             self._restore_staged = False
-            self._rpcs3_proc.launch(str(RPCS3_EXE), [], cwd=str(RPCS3_DIR))
+            self._rpcs3_proc.launch(str(RPCS3_EXE), rpcs3_launch_args(), cwd=str(RPCS3_DIR))
 
         if (gs_mode == "operations"
                 and self._settings.get("enable_telemetry")
                 and self._telemetry is None):
             self._telemetry = TelemetryStreamer(
-                log_path=PORTABLE_DIR / "log" / "RPCS3.log",
+                log_path=rpcs3_log_path(),
                 url=TELEMETRY_URL,
                 metadata={
                     "version":     VERSION,

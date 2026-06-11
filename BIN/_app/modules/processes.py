@@ -2,14 +2,42 @@
 
 Supports two launch modes:
   - new_console=False (default): QProcess, inherits parent's console state.
-  - new_console=True: subprocess.Popen with CREATE_NEW_CONSOLE so the child
-    gets its own visible CMD window.  State is polled every 2 s via QTimer.
+  - new_console=True: the child gets its own visible console window.  On
+    Windows that is subprocess.Popen with CREATE_NEW_CONSOLE; on Linux the
+    child is wrapped in the first terminal emulator found (hidden QProcess
+    fallback when none is installed).  State is polled every 2 s via QTimer.
 """
+import os
+import shutil
+import signal
 import socket
 import subprocess
 import sys
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
+
+# Terminal emulators probed in order. All but gnome-terminal keep the spawned
+# command in our process group, so killpg in stop() reaches it. gnome-terminal
+# delegates to a server process; --wait keeps our handle alive for the child's
+# lifetime, but the window survives stop() (the child is reaped by the server).
+_LINUX_TERMINALS = [
+    ("konsole",             lambda prog, args: ["konsole", "-e", prog, *args]),
+    ("xfce4-terminal",      lambda prog, args: ["xfce4-terminal", "-x", prog, *args]),
+    ("kitty",               lambda prog, args: ["kitty", prog, *args]),
+    ("alacritty",           lambda prog, args: ["alacritty", "-e", prog, *args]),
+    ("foot",                lambda prog, args: ["foot", prog, *args]),
+    ("xterm",               lambda prog, args: ["xterm", "-e", prog, *args]),
+    ("x-terminal-emulator", lambda prog, args: ["x-terminal-emulator", "-e", prog, *args]),
+    ("gnome-terminal",      lambda prog, args: ["gnome-terminal", "--wait", "--", prog, *args]),
+]
+
+
+def _terminal_argv(program: str, args: list[str]) -> list[str] | None:
+    """Wrap program+args in an available terminal emulator, or None if none found."""
+    for name, build in _LINUX_TERMINALS:
+        if shutil.which(name):
+            return build(program, list(args))
+    return None
 
 
 def is_port_open(host: str = "127.0.0.1", port: int = 80, timeout: float = 0.4) -> bool:
@@ -18,6 +46,42 @@ def is_port_open(host: str = "127.0.0.1", port: int = 80, timeout: float = 0.4) 
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
+        return False
+
+
+_BIND_PROBE = """
+import errno, socket, sys
+rc = 0
+for port in (80, 443):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind((sys.argv[1], port))
+    except OSError as e:
+        rc = 2 if e.errno in (errno.EACCES, errno.EPERM) else rc
+    finally:
+        s.close()
+sys.exit(rc)
+"""
+
+
+def needs_port_privilege(python_exe: str, host: str) -> bool:
+    """Return True if python_exe is denied ports 80/443 on host for lack of
+    privilege (Linux <1024 restriction).
+
+    Runs the probe in the given interpreter because a file capability
+    (cap_net_bind_service on the gameserver python) is per-binary; testing
+    from the launcher process would report the wrong privilege. Non-privilege
+    bind failures return False so the gameserver's own error reporting shows
+    them.
+    """
+    try:
+        res = subprocess.run(
+            [python_exe, "-c", _BIND_PROBE, host],
+            capture_output=True, timeout=10,
+        )
+        return res.returncode == 2
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
@@ -45,20 +109,33 @@ class ManagedProcess(QObject):
         if self.is_running():
             return False
 
-        if new_console and sys.platform == "win32":
-            try:
-                self._popen = subprocess.Popen(
-                    [program] + args,
-                    cwd=cwd,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE,
-                )
-            except OSError:
-                return False
-            self._poll_timer = QTimer(self)
-            self._poll_timer.timeout.connect(self._check_popen)
-            self._poll_timer.start(2000)
-            self.started.emit()
-            return True
+        if new_console:
+            if sys.platform == "win32":
+                try:
+                    self._popen = subprocess.Popen(
+                        [program] + args,
+                        cwd=cwd,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    )
+                except OSError:
+                    return False
+                return self._start_popen_polling()
+
+            argv = _terminal_argv(program, args)
+            if argv is not None:
+                # Own process group so stop() can signal the terminal and the
+                # wrapped child together.
+                try:
+                    self._popen = subprocess.Popen(
+                        argv,
+                        cwd=cwd,
+                        start_new_session=True,
+                    )
+                except OSError:
+                    return False
+                return self._start_popen_polling()
+            # No terminal emulator (e.g. Steam Deck game mode): fall through
+            # to a hidden QProcess; the log watcher still surfaces status.
 
         self._proc = QProcess(self)
         if cwd:
@@ -73,7 +150,13 @@ class ManagedProcess(QObject):
 
     def stop(self):
         if self._popen:
-            self._popen.terminate()
+            if sys.platform != "win32":
+                try:
+                    os.killpg(os.getpgid(self._popen.pid), signal.SIGTERM)
+                except OSError:
+                    self._popen.terminate()
+            else:
+                self._popen.terminate()
             self._popen = None
             if self._poll_timer:
                 self._poll_timer.stop()
@@ -97,6 +180,13 @@ class ManagedProcess(QObject):
         return None
 
     # ------------------------------------------------------------------
+    def _start_popen_polling(self) -> bool:
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._check_popen)
+        self._poll_timer.start(2000)
+        self.started.emit()
+        return True
+
     def _check_popen(self):
         if self._popen and self._popen.poll() is not None:
             rc = self._popen.returncode or 0
