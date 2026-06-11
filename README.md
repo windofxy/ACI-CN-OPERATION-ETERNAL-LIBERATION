@@ -4,15 +4,29 @@ A community kit for playing OPERATION ETERNAL LIBERATION online via [RPCS3](http
 
 ## Playing
 
-Run the latest `OP-ETERNAL-Setup-*.exe` from the releases page. It installs the kit and creates a desktop shortcut.
+### Windows
 
-Open the shortcut. First run downloads an embedded Python runtime and the GUI dependencies.
+Run the latest `OP-ETERNAL-Setup-*.exe` from the releases page. It installs the kit and creates a desktop shortcut. Open the shortcut.
+
+### Linux
+
+Download the latest `OP-ETERNAL-*-linux-x86_64.tar.xz` from the releases page, extract it anywhere, and run the play script:
+
+```
+tar -xJf OP-ETERNAL-*-linux-x86_64.tar.xz
+cd OPERATION-ETERNAL-LIBERATION
+"./Play OPERATION ETERNAL LIBERATION (Linux).sh"
+```
+
+The first run asks for your password once: the game server listens on ports 80 and 443, and Linux requires a one-time permission for that. It is granted to the kit's bundled interpreter only, never to your system Python.
+
+### Both platforms
 
 You provide:
 
 1. PS3 firmware. When RPCS3 prompts, point it at your own `PS3UPDAT.PUP`.
 2. The game at version 2.11. In RPCS3, *File > Install Packages/Raps*; install your game files.
-3. The 15 TSS files. Drop them into the `TSS\` folder.
+3. The 15 TSS files. Drop them into the `TSS` folder.
 
 Always launch the game from the launcher, not directly from RPCS3, so the network config matches your current LAN IP.
 
@@ -20,15 +34,16 @@ The **Saves** tab includes a save editor, a backup browser, and a "new game" ove
 
 ### Updating
 
-Running a newer installer over an existing install preserves your RPCS3 portable data, RPCN config files, `settings.json`, and `BIN\TSS\`. Everything else is overwritten.
+On Windows, run a newer installer over the existing install. On Linux, extract a newer tarball over the existing folder. Your RPCS3 portable data, RPCN config files, launcher settings, and `TSS` folder are preserved.
 
 ### Troubleshooting
 
 - **"Failed to connect to Playstation Network".** Click the RPCN icon in RPCS3 to confirm you're logged in, and check that all 15 TSS files show as present in the launcher's **TSS Files** tab.
 - **"Failed to connect to game server".** Make sure the mock game server is listening on the same IP as your LAN, or, if it's hosted remotely, that the remote address is reachable.
-- **RPCN login fails (self-hosted).** Make sure `rpcn.exe` is running and Windows Firewall allows TCP 31313 and 31315.
+- **RPCN login fails (self-hosted).** Make sure the rpcn process is running and your firewall allows TCP 31313 and 31315.
 - **Can't host or join rooms.** Right-click the game in RPCS3, open *Custom Configuration > Network*, enable **UPnP**.
-- **TSS warning on launch.** Drop your 15 TSS files into `BIN\TSS\`.
+- **TSS warning on launch.** Drop your 15 TSS files into the `TSS` folder.
+- **"Game server ports" error (Linux).** Run the command shown in the dialog once, then launch again.
 
 ## Hosting your own server
 
@@ -107,26 +122,19 @@ The bind-mounted `_app/rpcn/` data is preserved across updates.
 
 ## Building
 
-Clone with [Git](https://git-scm.com/downloads/win):
+Clone with [Git](https://git-scm.com/downloads):
 
 ```
 git clone --recurse-submodules <repo-url>
 ```
 
-- Run `SRC\clone-git-repos.bat`.
-- Apply the patches with `SRC\apply-patches.bat`.
+### Windows
 
-`SRC\reset-git-repos.bat` reverts both submodules to baseline.
+Run `SRC\clone-git-repos.bat`, then apply the patches with `SRC\apply-patches.bat`. `SRC\reset-git-repos.bat` reverts both submodules to baseline.
 
-### RPCS3
+**RPCS3** requires [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) with the C++ workload. Follow the upstream [BUILDING.md](https://github.com/RPCS3/rpcs3/blob/master/BUILDING.md), then copy everything from `SRC\GIT\rpcs3\bin\` into `BIN\_app\RPCS3\`.
 
-Requires [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) with the C++ workload.
-
-Follow the upstream [BUILDING.md](https://github.com/RPCS3/rpcs3/blob/master/BUILDING.md), then copy everything from `SRC\GIT\rpcs3\bin\` into `BIN\_app\RPCS3\`.
-
-### RPCN
-
-Requires [Rust](https://rustup.rs) (MSVC ABI), [Strawberry Perl](https://strawberryperl.com), [NASM](https://www.nasm.us/), and [protoc](https://github.com/protocolbuffers/protobuf/releases) on `PATH`.
+**RPCN** requires [Rust](https://rustup.rs) (MSVC ABI), [Strawberry Perl](https://strawberryperl.com), [NASM](https://www.nasm.us/), and [protoc](https://github.com/protocolbuffers/protobuf/releases) on `PATH`:
 
 ```
 cd SRC\GIT\rpcn
@@ -134,15 +142,25 @@ cargo build --release
 copy target\release\rpcn.exe ..\..\BIN\_app\rpcn\rpcn.exe
 ```
 
+### Linux
+
+Run `SRC/clone-git-repos.sh`, then apply the patches with `SRC/apply-patches.sh`. `SRC/reset-git-repos.sh` reverts both submodules to baseline. See `SRC/README.md` for details.
+
+**RPCS3**: follow the upstream [BUILDING.md](https://github.com/RPCS3/rpcs3/blob/master/BUILDING.md). The release AppImage is built with rpcs3's own CI container; `.github/workflows/build.yml` has the exact invocation. Place the resulting AppImage (or a `rpcs3` binary) in `BIN/_app/RPCS3/`.
+
+**RPCN** requires [Rust](https://rustup.rs) and protoc:
+
+```
+cd SRC/GIT/rpcn
+cargo build --release
+cp target/release/rpcn ../../BIN/_app/rpcn/rpcn
+```
+
 ### Packaging
 
-Requires [Inno Setup 6](https://jrsoftware.org/isdl.php) at `C:\Program Files (x86)\Inno Setup 6\ISCC.exe` and [7-Zip](https://www.7-zip.org/download.html) at `C:\Program Files\7-Zip\7z.exe`.
+**Windows**: `package.bat` requires [Inno Setup 6](https://jrsoftware.org/isdl.php) at `C:\Program Files (x86)\Inno Setup 6\ISCC.exe` and [7-Zip](https://www.7-zip.org/download.html) at `C:\Program Files\7-Zip\7z.exe`. Produces `OP-ETERNAL-Setup-{version}.exe`, `OEL-SRC-{version}.7z`, and `OEL-DOCKER-{version}.7z`.
 
-Run `package.bat` to produce:
-
-- `OP-ETERNAL-Setup-{version}.exe`
-- `OEL-SRC-{version}.7z`
-- `OEL-DOCKER-{version}.7z`
+**Linux**: `package.sh` produces `OEL-SRC-{version}.tar.xz` and `OEL-DOCKER-{version}.tar.xz`, plus the client bundle `OP-ETERNAL-{version}-linux-x86_64.tar.xz` when an AppImage is staged in `BIN/_app/RPCS3` and `ci/provision-linux-python.sh` has provisioned the bundled Python.
 
 All versioned from `AppVersion` in `OEL.iss`. `OEL-DOCKER` is a source bundle for Linux self-hosters; they extract it, `cd BIN`, and run `docker compose up -d --build`.
 
