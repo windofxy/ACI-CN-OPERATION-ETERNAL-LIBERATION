@@ -7,7 +7,7 @@ echo  ACI-RPCS3 -- Apply source patches
 echo ============================================================
 echo.
 
-echo [1/10] Applying RPCS3 TSS patch...
+echo [1/9] Applying RPCS3 TSS patch...
 cd /d "%SRC%GIT\rpcs3"
 git apply "..\..\PATCH\RPCS3\tss-support.patch"
 if errorlevel 1 (
@@ -19,19 +19,7 @@ if errorlevel 1 (
 echo Done.
 echo.
 
-echo [2/10] Applying RPCS3 P2PS disconnect fix patch...
-cd /d "%SRC%GIT\rpcs3"
-git apply "..\..\PATCH\RPCS3\p2ps-disconnect-fix.patch"
-if errorlevel 1 (
-    echo.
-    echo ERROR: RPCS3 P2PS patch failed.
-    echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
-    pause & exit /b 1
-)
-echo Done.
-echo.
-
-echo [3/10] Applying RPCS3 tree transparency patch...
+echo [2/9] Applying RPCS3 tree transparency patch...
 cd /d "%SRC%GIT\rpcs3"
 git apply "..\..\PATCH\RPCS3\tree-transparency.patch"
 if errorlevel 1 (
@@ -43,7 +31,7 @@ if errorlevel 1 (
 echo Done.
 echo.
 
-echo [4/10] Applying RPCS3 NP LocalNetInfo byte order fix patch...
+echo [3/9] Applying RPCS3 NP LocalNetInfo byte order fix patch...
 cd /d "%SRC%GIT\rpcs3"
 git apply "..\..\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch"
 if errorlevel 1 (
@@ -55,55 +43,43 @@ if errorlevel 1 (
 echo Done.
 echo.
 
-echo [5/10] Applying RPCS3 NP signaling GetConnectionInfo disconnect fix patch...
+echo [4/9] Applying RPCS3 P2PS disconnect fix patch...
 cd /d "%SRC%GIT\rpcs3"
-git apply "..\..\PATCH\RPCS3\np-signaling-conninfo-disconnect.patch"
+git apply "..\..\PATCH\RPCS3\p2ps-disconnect-fix.patch"
 if errorlevel 1 (
     echo.
-    echo ERROR: RPCS3 NP signaling GetConnectionInfo disconnect fix patch failed.
+    echo ERROR: RPCS3 P2PS disconnect fix patch failed.
     echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
     pause & exit /b 1
 )
 echo Done.
 echo.
 
-echo [6/10] Applying RPCS3 NP disconnect handling patch...
+echo [5/9] Applying RPCS3 freeze-tracer diagnostics patch...
 cd /d "%SRC%GIT\rpcs3"
-git apply "..\..\PATCH\RPCS3\np-disconnect-handling.patch"
+git apply "..\..\PATCH\RPCS3\np-freeze-tracer.patch"
 if errorlevel 1 (
     echo.
-    echo ERROR: RPCS3 NP disconnect handling patch failed.
+    echo ERROR: RPCS3 freeze-tracer diagnostics patch failed.
     echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
     pause & exit /b 1
 )
 echo Done.
 echo.
 
-echo [7/10] Applying RPCS3 P2PS disconnect diagnostics patch...
+echo [6/9] Applying RPCS3 lv2 cond-tracer diagnostics patch...
 cd /d "%SRC%GIT\rpcs3"
-git apply "..\..\PATCH\RPCS3\p2ps-disconnect-diagnostics.patch"
+git apply "..\..\PATCH\RPCS3\lv2-cond-tracer.patch"
 if errorlevel 1 (
     echo.
-    echo ERROR: RPCS3 P2PS disconnect diagnostics patch failed.
+    echo ERROR: RPCS3 lv2 cond-tracer diagnostics patch failed.
     echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
     pause & exit /b 1
 )
 echo Done.
 echo.
 
-echo [8/10] Applying RPCS3 P2PS disconnect deadlock fix patch...
-cd /d "%SRC%GIT\rpcs3"
-git apply "..\..\PATCH\RPCS3\p2ps-disconnect-deadlock-fix.patch"
-if errorlevel 1 (
-    echo.
-    echo ERROR: RPCS3 P2PS disconnect deadlock fix patch failed.
-    echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
-    pause & exit /b 1
-)
-echo Done.
-echo.
-
-echo [9/10] Applying RPCS3 frame limit lock patch...
+echo [7/9] Applying RPCS3 frame limit lock patch...
 cd /d "%SRC%GIT\rpcs3"
 git apply "..\..\PATCH\RPCS3\framelimit-lock.patch"
 if errorlevel 1 (
@@ -115,7 +91,19 @@ if errorlevel 1 (
 echo Done.
 echo.
 
-echo [10/10] Applying RPCN TSS server patch...
+echo [8/9] Applying RPCS3 RPCN disconnect fix patch...
+cd /d "%SRC%GIT\rpcs3"
+git apply "..\..\PATCH\RPCS3\rpcn-disconnect-fix.patch"
+if errorlevel 1 (
+    echo.
+    echo ERROR: RPCS3 RPCN disconnect fix patch failed.
+    echo Make sure SRC\GIT\rpcs3 is a clean clone with no local modifications.
+    pause & exit /b 1
+)
+echo Done.
+echo.
+
+echo [9/9] Applying RPCN TSS server patch...
 cd /d "%SRC%GIT\rpcn"
 git apply "..\..\PATCH\RPCN\tss-server.patch"
 if errorlevel 1 (

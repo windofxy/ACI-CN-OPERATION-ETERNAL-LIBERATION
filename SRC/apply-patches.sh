@@ -21,16 +21,15 @@ step() {
     echo
 }
 
-step "1/10" rpcs3 "RPCS3/tss-support.patch"       "RPCS3 TSS patch"
-step "2/10" rpcs3 "RPCS3/p2ps-disconnect-fix.patch" "RPCS3 P2PS disconnect fix patch"
-step "3/10" rpcs3 "RPCS3/tree-transparency.patch"   "RPCS3 tree transparency patch"
-step "4/10" rpcs3 "RPCS3/np-localnetinfo-byteorder-fix.patch" "RPCS3 NP LocalNetInfo byte order fix patch"
-step "5/10" rpcs3 "RPCS3/np-signaling-conninfo-disconnect.patch" "RPCS3 NP signaling GetConnectionInfo disconnect fix patch"
-step "6/10" rpcs3 "RPCS3/np-disconnect-handling.patch" "RPCS3 NP disconnect handling patch (ghost-member + logging)"
-step "7/10" rpcs3 "RPCS3/p2ps-disconnect-diagnostics.patch" "RPCS3 P2PS disconnect diagnostics patch (teardown coverage + logging)"
-step "8/10" rpcs3 "RPCS3/p2ps-disconnect-deadlock-fix.patch" "RPCS3 P2PS disconnect deadlock fix patch (defer teardown out of data_mutex)"
-step "9/10" rpcs3 "RPCS3/framelimit-lock.patch"     "RPCS3 frame limit lock patch (anticheat)"
-step "10/10" rpcn  "RPCN/tss-server.patch"          "RPCN TSS server patch"
+step "1/9" rpcs3 "RPCS3/tss-support.patch"       "RPCS3 TSS patch"
+step "2/9" rpcs3 "RPCS3/tree-transparency.patch"   "RPCS3 tree transparency patch"
+step "3/9" rpcs3 "RPCS3/np-localnetinfo-byteorder-fix.patch" "RPCS3 NP LocalNetInfo byte order fix patch"
+step "4/9" rpcs3 "RPCS3/p2ps-disconnect-fix.patch" "RPCS3 P2PS disconnect fix patch"
+step "5/9" rpcs3 "RPCS3/np-freeze-tracer.patch"  "RPCS3 freeze-tracer diagnostics patch"
+step "6/9" rpcs3 "RPCS3/lv2-cond-tracer.patch"  "RPCS3 lv2 cond-tracer diagnostics patch"
+step "7/9" rpcs3 "RPCS3/framelimit-lock.patch"          "RPCS3 frame limit lock patch (anticheat)"
+step "8/9" rpcs3 "RPCS3/rpcn-disconnect-fix.patch"    "RPCS3 RPCN disconnect fix patch"
+step "9/9" rpcn  "RPCN/tss-server.patch"             "RPCN TSS server patch"
 
 cat <<'EOF'
 ============================================================

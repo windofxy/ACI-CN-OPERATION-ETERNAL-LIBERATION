@@ -72,14 +72,13 @@ Sync-Submodule "SRC\GIT\rpcn"  $RpcnUrl  $RpcnCommit
 # 2. Apply patches
 Step "Apply patches"
 Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\tss-support.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch"
 Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\tree-transparency.patch"
 Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-signaling-conninfo-disconnect.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-disconnect-handling.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\p2ps-disconnect-diagnostics.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\p2ps-disconnect-deadlock-fix.patch"
+Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch"
+Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-freeze-tracer.patch"
+Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\lv2-cond-tracer.patch"
 Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\framelimit-lock.patch"
+Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\rpcn-disconnect-fix.patch"
 Apply-Patch "SRC\GIT\rpcn"  "$RepoRoot\SRC\PATCH\RPCN\tss-server.patch"
 
 # 3. Prebuilt LLVM libs
