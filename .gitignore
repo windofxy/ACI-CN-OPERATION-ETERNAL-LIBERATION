@@ -3,6 +3,7 @@
 # -------------------------------------------------------
 /*.exe
 /*.7z
+/*.tar.xz
 
 # -------------------------------------------------------
 # TSS files -- licensed, not distributed (dir tracked via .gitkeep)
@@ -71,4 +72,6 @@ __pycache__/
 /BIN/_app/RPCS3/*.pdb
 /BIN/_app/RPCS3/qt6/
 /BIN/_app/RPCS3/test/
+/BIN/_app/RPCS3/*.AppImage
 /BIN/_app/rpcn/rpcn.exe
+/BIN/_app/rpcn/rpcn
