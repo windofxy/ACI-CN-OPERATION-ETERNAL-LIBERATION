@@ -85,6 +85,35 @@ def needs_port_privilege(python_exe: str, host: str) -> bool:
         return False
 
 
+def can_elevate() -> bool:
+    """Return True if a graphical privilege prompt (pkexec) is available."""
+    return bool(shutil.which("pkexec"))
+
+
+def grant_port_capability(python_exe: str) -> str:
+    """Grant cap_net_bind_service to python_exe via pkexec, which shows the
+    desktop's own password prompt. Needs pkexec and a running polkit agent
+    (standard on desktop sessions).
+
+    Returns "granted", "cancelled" (user dismissed the prompt), or "failed".
+    """
+    pkexec = shutil.which("pkexec")
+    setcap = next((p for p in (shutil.which("setcap"), "/usr/sbin/setcap",
+                               "/sbin/setcap") if p and os.path.exists(p)), None)
+    if not pkexec or not setcap:
+        return "failed"
+    try:
+        res = subprocess.run(
+            [pkexec, setcap, "cap_net_bind_service=+ep", python_exe],
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "failed"
+    if res.returncode == 0:
+        return "granted"
+    return "cancelled" if res.returncode == 126 else "failed"
+
+
 class ManagedProcess(QObject):
     """Wraps either QProcess or subprocess.Popen for a single named child process."""
 

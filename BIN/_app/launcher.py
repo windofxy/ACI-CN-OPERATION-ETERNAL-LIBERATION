@@ -108,18 +108,22 @@ def gameserver_python() -> Path:
     return Path(PYTHON_EXE)
 
 
-def privileged_port_help() -> str:
-    """Actionable message for the Linux <1024 port restriction (ports 80/443)."""
+def privileged_port_command() -> str:
+    """The shell command that lets the game server bind ports 80 and 443."""
     py = gameserver_python()
-    msg = ("The game server must listen on ports 80 and 443, which Linux "
-           "reserves for privileged processes.\n\n")
     if py.name == "python3-gameserver":
-        msg += ("Run this once in a terminal, then launch again:\n\n"
-                f"sudo setcap cap_net_bind_service=+ep '{py}'")
-    else:
-        msg += ("Run this once in a terminal, then launch again:\n\n"
-                "sudo sysctl net.ipv4.ip_unprivileged_port_start=80\n\n"
-                "To make it permanent:\n"
+        return f"sudo setcap cap_net_bind_service=+ep '{py}'"
+    return "sudo sysctl net.ipv4.ip_unprivileged_port_start=80"
+
+
+def privileged_port_help() -> str:
+    """Explanation for the Linux <1024 port restriction (ports 80/443)."""
+    msg = ("The game server must listen on ports 80 and 443, which Linux "
+           "reserves for privileged processes.\n\n"
+           "Run this once in a terminal, then launch again:\n\n"
+           f"{privileged_port_command()}")
+    if gameserver_python().name != "python3-gameserver":
+        msg += ("\n\nTo make it permanent:\n"
                 "echo net.ipv4.ip_unprivileged_port_start=80 | "
                 "sudo tee /etc/sysctl.d/99-opeternal.conf")
     return msg
@@ -1623,6 +1627,45 @@ class ACILauncher(QMainWindow):
         self._play_tab.set_launch_enabled(True)
         QMessageBox.critical(self, "Launch failed", msg)
 
+    def _grant_port_privilege(self, gs_python: Path, bind_ip: str) -> bool:
+        """Get the game server its ports 80/443 capability. Offers to grant it
+        through the desktop password prompt (pkexec); falls back to a
+        copy-pasteable command. Returns True once the capability is in place."""
+        elevate = processes.can_elevate() and gs_python.name == "python3-gameserver"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Game server ports")
+        box.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        grant_btn = None
+        if elevate:
+            box.setText("The game server needs permission to use ports 80 and 443.\n\n"
+                        "Grant it now and your system will ask for your password.")
+            grant_btn = box.addButton("Grant permission", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            box.setText(privileged_port_help())
+        copy_btn = box.addButton("Copy command", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(grant_btn or copy_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is grant_btn:
+            outcome = processes.grant_port_capability(str(gs_python))
+            if (outcome == "granted"
+                    and not processes.needs_port_privilege(str(gs_python), bind_ip)):
+                return True
+            if outcome != "cancelled":
+                QMessageBox.warning(
+                    self, "Game server ports",
+                    "Granting the permission did not complete. Run this in a "
+                    "terminal, then launch again:\n\n" + privileged_port_command())
+        elif clicked is copy_btn:
+            QApplication.clipboard().setText(privileged_port_command())
+        return False
+
     def _on_worker_done(self, swap_ip: str):
         self.setWindowTitle(f"OPERATION ETERNAL LIBERATION {VERSION}")
         rpcn_mode = self._settings.get("rpcn_mode", "official")
@@ -1654,8 +1697,9 @@ class ACILauncher(QMainWindow):
 
         if not processes.is_port_open(swap_ip):
             gs_python = gameserver_python()
-            if not _IS_WIN and processes.needs_port_privilege(str(gs_python), swap_ip):
-                QMessageBox.critical(self, "Game server ports", privileged_port_help())
+            if (not _IS_WIN
+                    and processes.needs_port_privilege(str(gs_python), swap_ip)
+                    and not self._grant_port_privilege(gs_python, swap_ip)):
                 self._play_tab.set_launch_enabled(True)
                 return
             ok = self._gameserver.launch(

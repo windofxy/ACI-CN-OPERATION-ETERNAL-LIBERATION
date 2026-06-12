@@ -68,7 +68,7 @@ def ensure_custom_config(
 
     if not os.path.exists(global_cfg):
         if progress_cb:
-            progress_cb("No RPCS3 config found — launching briefly to generate one...")
+            progress_cb("No RPCS3 config found, launching briefly to generate one...")
         proc = subprocess.Popen([rpcs3_exe] + list(extra_args or []), cwd=rpcs3_dir)
         for _ in range(timeout):
             if os.path.exists(global_cfg):

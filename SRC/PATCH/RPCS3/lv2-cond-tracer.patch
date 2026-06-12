@@ -80,9 +80,9 @@ index 9e175c304..5c6e6d3ff 100644
  				}
  				else
 @@ -148,6 +153,21 @@ public:
- 							(unsigned long long)freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
- 							(unsigned long long)freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
- 							(unsigned long long)freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
+ 							freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
+ 							freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
+ 							freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
 +						// Layer-2: arm cond tracing and take the first park snapshot.
 +						freeze_tracer::arm_cond_trace();
 +						freeze_tracer::dump_parked_threads();

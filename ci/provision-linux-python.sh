@@ -35,8 +35,18 @@ else
 fi
 
 echo "Installing packages (cryptography + PySide6)..."
-"$TARGET/bin/python3" -m pip install --quiet --no-warn-script-location \
-    cryptography PySide6-Essentials
+# pip normally picks wheels by the BUILD host's glibc, so a bundle built on a
+# new distro breaks users on older ones (PySide6 6.10+ wants GLIBCXX_3.4.29,
+# new cryptography wheels want GLIBC_2.33+). Force the manylinux_2_28 baseline
+# (glibc 2.28, distros from ~2019 onward) regardless of the build host.
+# PySide6 is also pinned to the last release shipping manylinux_2_28 wheels.
+SITE="$TARGET/lib/python3.12/site-packages"
+"$TARGET/bin/python3" -m pip install --quiet --upgrade \
+    --only-binary=:all: \
+    --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
+    --implementation cp --python-version 3.12 \
+    --target "$SITE" \
+    cryptography "PySide6-Essentials==6.9.3"
 
 # Dedicated interpreter copy for the game server: users grant it
 # cap_net_bind_service (ports 80/443) at install time, so the capability

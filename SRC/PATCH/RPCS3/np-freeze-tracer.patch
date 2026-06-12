@@ -126,10 +126,10 @@ index b8658667e..9e175c304 100644
 +						ft_sig_stale = true;
 +						sys_net.warning("[freeze-tracer] signaling no progress for %u ms", ft_ms);
 +						sys_net.warning("[freeze-tracer] callbacks enqueued dead=%llu estab=%llu delivered dead=%llu estab=%llu",
-+							(unsigned long long)freeze_tracer::g_dead_enqueued.load(std::memory_order_relaxed),
-+							(unsigned long long)freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
-+							(unsigned long long)freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
-+							(unsigned long long)freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
++							freeze_tracer::g_dead_enqueued.load(std::memory_order_relaxed),
++							freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
++							freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
++							freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
 +					}
 +				}
 +
@@ -168,7 +168,7 @@ index b8658667e..9e175c304 100644
 +					if (d_sig2 || d_sig || d_member)
 +					{
 +						sys_net.notice("[freeze-tracer] getter rate sig2=%llu sig=%llu member=%llu /s",
-+							(unsigned long long)d_sig2, (unsigned long long)d_sig, (unsigned long long)d_member);
++							d_sig2, d_sig, d_member);
 +					}
 +					ft_last_sig2   = ft_sig2;
 +					ft_last_sig    = ft_sig;

@@ -6,15 +6,14 @@ A community kit for playing online via RPCS3 and an RPCN server.
 
 On Windows, open the desktop shortcut **Play OPERATION ETERNAL LIBERATION**.
 
-On Linux, run this from the install folder:
+On Linux (x86_64, distros from roughly 2022 onward - RPCS3 needs glibc 2.35), run this from the install folder:
 
 ```
 ./Play\ OPERATION\ ETERNAL\ LIBERATION\ \(Linux\).sh
 ```
 
-The first Linux run asks for your password once: the game server listens on
-ports 80 and 443, and Linux requires a one-time permission for that. It is
-granted to the kit's own bundled interpreter only.
+The game server uses ports 80 and 443, so on first launch you are asked for
+your password to allow that.
 
 You provide:
 

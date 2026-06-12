@@ -18,7 +18,7 @@ cd OPERATION-ETERNAL-LIBERATION
 "./Play OPERATION ETERNAL LIBERATION (Linux).sh"
 ```
 
-The first run asks for your password once: the game server listens on ports 80 and 443, and Linux requires a one-time permission for that. It is granted to the kit's bundled interpreter only, never to your system Python.
+The game server uses ports 80 and 443, so on first launch you are asked for your password to allow that.
 
 ### Both platforms
 
