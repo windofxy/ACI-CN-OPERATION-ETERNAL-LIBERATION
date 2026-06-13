@@ -843,6 +843,18 @@ class SaveEditorTab(QWidget):
         pen_row.addWidget(self._reset_penalty_btn)
         root.addLayout(pen_row)
 
+        # Co-Op Matching Rate quick action (always visible), with a button to
+        # raise a low rate back to the floor.
+        coop_row = QHBoxLayout()
+        self._coop_label = QLabel("Co-Op Matching Rate: --")
+        self._bump_coop_btn = QPushButton(
+            f"Restore to {save_editor.COOP_MATCH_RATE_FLOOR}")
+        self._bump_coop_btn.setEnabled(False)
+        self._bump_coop_btn.clicked.connect(self._bump_coop_rate)
+        coop_row.addWidget(self._coop_label, 1)
+        coop_row.addWidget(self._bump_coop_btn)
+        root.addLayout(coop_row)
+
         self._toggle_btn = QToolButton()
         self._toggle_btn.setText("Save editor")
         self._toggle_btn.setCheckable(True)
@@ -1022,6 +1034,7 @@ class SaveEditorTab(QWidget):
         self._write_btn.setEnabled(any_loaded)
         self._reset_penalty_btn.setEnabled(self._slot4 is not None)
         self._refresh_penalty_label()
+        self._refresh_coop_label()
         return errors
 
     def _refresh_penalty_label(self):
@@ -1030,6 +1043,16 @@ class SaveEditorTab(QWidget):
         else:
             val = self._slot4.read_all().get("penalty-rank", 0)
             self._penalty_label.setText(f"Penalty Rank: {val}")
+
+    def _refresh_coop_label(self):
+        if self._slot3 is None:
+            self._coop_label.setText("Co-Op Matching Rate: --")
+            self._bump_coop_btn.setEnabled(False)
+            return
+        val = self._slot3.read_coop_match_rate()
+        self._coop_label.setText(f"Co-Op Matching Rate: {val}")
+        # Only enabled below the floor; writing the floor to a higher rate would lower it.
+        self._bump_coop_btn.setEnabled(val < save_editor.COOP_MATCH_RATE_FLOOR)
 
     def _stage_restore(self, slot_obj: save_editor.SaveSlot):
         slot20d = Path(slot_obj._path).stem.split("_")[-1]
@@ -1126,6 +1149,56 @@ class SaveEditorTab(QWidget):
             return False, "No save folder."
         self._load_slots()
         return self._apply_penalty_reset()
+
+    def _bump_coop_rate(self):
+        if self._slot3 is None:
+            QMessageBox.warning(self, "Not loaded", "Slot 3 has not been read yet.")
+            return
+        ok, msg = self._apply_coop_bump()
+        if not ok:
+            QMessageBox.critical(self, "Restore failed", msg)
+            return
+        floor = save_editor.COOP_MATCH_RATE_FLOOR
+        QMessageBox.information(
+            self, "Co-Op Matching Rate restored",
+            f"Co-Op Matching Rate set to {floor} and restore staged.\n\n"
+            "Boot OP ETERNAL once to apply the change."
+        )
+
+    def _apply_coop_bump(self) -> tuple[bool, str]:
+        if self._slot3 is None:
+            return False, "Slot 3 has not been read yet."
+        try:
+            self._slot3.write_coop_match_rate(save_editor.COOP_MATCH_RATE_FLOOR)
+            self._slot3.save()
+            self._stage_restore(self._slot3)
+        except Exception as e:
+            return False, str(e)
+        self._refresh_coop_label()
+        self.restore_staged.emit()
+        return True, ""
+
+    def peek_latest_coop_rate(self) -> tuple[int | None, str | None]:
+        """Return (coop_match_rate, backup_path) for the newest slot 3 backup, else (None, None)."""
+        if not self._save_dir:
+            return None, None
+        backups_dir = os.path.join(self._save_dir, "backups")
+        candidates = sorted(glob.glob(os.path.join(backups_dir, "*_00000000000000000003.tdt")))
+        if not candidates:
+            return None, None
+        latest = candidates[-1]
+        try:
+            slot = save_editor.SaveSlot(3, latest)
+            return slot.read_coop_match_rate(), latest
+        except Exception:
+            return None, None
+
+    def bump_coop_from_latest(self) -> tuple[bool, str]:
+        """Reload slots from the latest backups, raise the Co-Op rate to the floor, refresh the UI."""
+        if not self._save_dir:
+            return False, "No save folder."
+        self._load_slots()
+        return self._apply_coop_bump()
 
 # ---------------------------------------------------------------------------
 # Backup / Restore sub-tab
@@ -1543,6 +1616,7 @@ class ACILauncher(QMainWindow):
         self._restore_staged = False
         self._save_load_offer_shown = False
         self._last_penalty_check_path: str | None = None
+        self._last_coop_check_path: str | None = None
         self._telemetry: TelemetryStreamer | None = None
 
         for proc, name in ((self._gameserver, "gameserver"),
@@ -1566,8 +1640,8 @@ class ACILauncher(QMainWindow):
         # One-shot WireGuard relay bind check, once the window is shown.
         QTimer.singleShot(0, self._play_tab._check_relay_bind)
 
-        # Let the window paint before the first penalty check.
-        QTimer.singleShot(800, self._check_penalty_rank)
+        # Let the window paint before the first save-state checks.
+        QTimer.singleShot(800, self._check_save_alerts)
 
         if self._settings.get("auto_check_updates"):
             QTimer.singleShot(1500, self._check_for_updates_startup)
@@ -1827,9 +1901,14 @@ class ACILauncher(QMainWindow):
         self._play_tab.refresh_setup_status()
         tus_saves.cleanup_restore_sentinels(str(PORTABLE_DIR / "tus"))
         self._restore_staged = False
-        # Pick up any backups written this session before the penalty check.
+        # Pick up any backups written this session before the save-state checks.
         self._saves_tab.editor_tab._try_auto_read()
+        self._check_save_alerts()
+
+    def _check_save_alerts(self):
+        # Modal dialogs, so run sequentially: penalty first, then Co-Op rate.
         self._check_penalty_rank()
+        self._check_coop_rate()
 
     def _check_penalty_rank(self):
         editor = self._saves_tab.editor_tab
@@ -1868,6 +1947,48 @@ class ACILauncher(QMainWindow):
         QMessageBox.information(
             self, "Done",
             "Penalty Rank reset to 0 and restore staged.\n"
+            "Boot OP ETERNAL once to apply the change."
+        )
+
+    def _check_coop_rate(self):
+        editor = self._saves_tab.editor_tab
+        rate, path = editor.peek_latest_coop_rate()
+        if rate is None or path is None:
+            return
+        floor = save_editor.COOP_MATCH_RATE_FLOOR
+        if rate >= floor:
+            self._last_coop_check_path = path
+            return
+        if path == self._last_coop_check_path:
+            return
+        self._last_coop_check_path = path
+        reply = QMessageBox.question(
+            self, "Co-Op Matching Rate low",
+            f"Your latest save shows a Co-Op Matching Rate of {rate}, below the "
+            f"{floor} needed to unlock the HARD co-op missions at First Lieutenant.\n\n"
+            f"Would you like to restore it to {floor}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        confirm = QMessageBox.warning(
+            self, "Confirm Co-Op Matching Rate change",
+            f"This will write Co-Op Matching Rate = {floor} to your local save and "
+            "stage it for the game to apply on next boot. The change syncs to RPCN "
+            "the next time the game saves.\n\n"
+            "Proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = editor.bump_coop_from_latest()
+        if not ok:
+            QMessageBox.warning(self, "Restore failed", msg)
+            return
+        self._restore_staged = True
+        QMessageBox.information(
+            self, "Done",
+            f"Co-Op Matching Rate set to {floor} and restore staged.\n"
             "Boot OP ETERNAL once to apply the change."
         )
 
