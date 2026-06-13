@@ -1,6 +1,7 @@
 """OP ETERNAL Launcher - OPERATION ETERNAL LIBERATION."""
 import glob
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -191,6 +192,28 @@ def parse_remote_addr(s: str) -> tuple[str, int, int]:
     https_p = _port(2, 443)
     return host, http_p, https_p
 
+
+# WireGuard relay tunnel subnet (see WORK/docs/networking/rpcn-ports-relay.md).
+RELAY_SUBNET = "10.99.99.0/24"
+
+
+def is_relay_addr(ip: str) -> bool:
+    """True if `ip` is an IPv4 inside RELAY_SUBNET (a WireGuard tunnel address)."""
+    if not ip:
+        return False
+    try:
+        return ipaddress.ip_address(ip) in ipaddress.ip_network(RELAY_SUBNET)
+    except ValueError:
+        return False
+
+
+def relay_bind_ip() -> str | None:
+    """First live LAN IP inside RELAY_SUBNET (the WireGuard tunnel IP), or None."""
+    for ip in ip_detect.list_lan_ips():
+        if is_relay_addr(ip):
+            return ip
+    return None
+
 # ---------------------------------------------------------------------------
 # Launch worker (runs preparation steps off the main thread)
 # ---------------------------------------------------------------------------
@@ -329,6 +352,7 @@ class PlayTab(QWidget):
         self._checksum_worker: ChecksumWorker | None = None
         self._checksum_done = False
         self._game_hash = ""
+        self._relay_bind_checked = False
         self._build_ui()
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(2000)
@@ -671,6 +695,55 @@ class PlayTab(QWidget):
     def get_rpcs3_bind_address(self) -> str:
         """Return the chosen RPCS3 bind address, or '' for the RPCS3 default."""
         return self._rpcs3_bind_combo.currentData() or ""
+
+    def _select_bind_ip(self, ip: str):
+        """Select the bind-combo item for `ip` ('' == RPCS3 default) and persist it.
+
+        setCurrentIndex only fires the save signal when the index actually
+        changes, so signals are blocked and the setting is saved explicitly to
+        also cover the case where the combo already sits on that item.
+        """
+        idx = self._rpcs3_bind_combo.findData(ip)
+        if idx < 0:
+            idx = 0  # fall back to the Default item if the IP is not enumerated
+        self._rpcs3_bind_combo.blockSignals(True)
+        self._rpcs3_bind_combo.setCurrentIndex(idx)
+        self._rpcs3_bind_combo.blockSignals(False)
+        self._settings["rpcs3_bind_address"] = self._rpcs3_bind_combo.currentData() or ""
+        save_settings(self._settings)
+
+    def _check_relay_bind(self):
+        """One-shot WireGuard-relay bind guidance (rpcn-ports-relay.md).
+
+        Relay players must bind RPCS3 to their 10.99.99.x tunnel IP so the game
+        advertises a relay-reachable address; a relay bind left set after the
+        tunnel goes down points at a dead interface and breaks all multiplayer.
+        """
+        if self._relay_bind_checked:
+            return
+        self._relay_bind_checked = True
+
+        relay_ip = relay_bind_ip()
+        saved = self._settings.get("rpcs3_bind_address", "")
+
+        if relay_ip:
+            if saved == relay_ip:
+                return  # already bound to the relay tunnel IP
+            if QMessageBox.question(
+                    self, "WireGuard relay detected",
+                    f"This machine has a WireGuard relay address ({relay_ip}).\n\n"
+                    "Other relay players can reach you only when RPCS3 advertises "
+                    f"this tunnel address. Set the RPCS3 bind address to {relay_ip}?",
+            ) == QMessageBox.StandardButton.Yes:
+                self._select_bind_ip(relay_ip)
+        elif is_relay_addr(saved):
+            # Stale relay bind with WireGuard off: reset to the RPCS3 default.
+            self._select_bind_ip("")
+            QMessageBox.information(
+                self, "Relay bind cleared",
+                f"WireGuard is not active, so the saved relay bind address ({saved}) "
+                "was reset to the RPCS3 default.",
+            )
 
     def _on_upnp_changed(self, checked: bool):
         self._settings["rpcs3_upnp"] = checked
@@ -1489,6 +1562,9 @@ class ACILauncher(QMainWindow):
         self._log_watcher = GameServerLogWatcher(GAMESERVER_LOG, self)
         self._log_watcher.save_load_error_seen.connect(self._on_save_load_error)
         self._log_watcher.start()
+
+        # One-shot WireGuard relay bind check, once the window is shown.
+        QTimer.singleShot(0, self._play_tab._check_relay_bind)
 
         # Let the window paint before the first penalty check.
         QTimer.singleShot(800, self._check_penalty_rank)
