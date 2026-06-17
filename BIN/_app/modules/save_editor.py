@@ -63,6 +63,11 @@ FIELDS = [
 
 FIELDS_BY_SLOT = {s: [f for f in FIELDS if f["slot"] == s] for s in (2, 3, 4)}
 
+# Online Co-Op Missions Matching Rate. Slot 3, 0xBC70, big-endian u16.
+COOP_MATCH_RATE_SLOT   = 3
+COOP_MATCH_RATE_OFFSET = 0xBC70
+COOP_MATCH_RATE_FLOOR  = 1550
+
 # ---------------------------------------------------------------------------
 # Low-level helpers
 # ---------------------------------------------------------------------------
@@ -72,6 +77,12 @@ def _read_u32(data: bytearray, offset: int) -> int:
 
 def _write_u32(data: bytearray, offset: int, value: int):
     struct.pack_into(">I", data, offset, value)
+
+def _read_u16(data: bytearray, offset: int) -> int:
+    return struct.unpack_from(">H", data, offset)[0]
+
+def _write_u16(data: bytearray, offset: int, value: int):
+    struct.pack_into(">H", data, offset, value)
 
 def _recompute_crcs(data: bytearray, entry_count: int, data_zone: int):
     TABLE_START = 0x18
@@ -138,6 +149,20 @@ class SaveSlot:
                         self._data[off] = value
                 return
         raise KeyError(f"Unknown field arg '{arg}' for slot {self.slot_num}")
+
+    def read_coop_match_rate(self) -> int:
+        """Read the Online Co-Op Missions Matching Rate (slot 3 only)."""
+        if self.slot_num != COOP_MATCH_RATE_SLOT:
+            raise ValueError("Co-Op Matching Rate lives in slot 3")
+        return _read_u16(self._data, COOP_MATCH_RATE_OFFSET)
+
+    def write_coop_match_rate(self, value: int):
+        """Set the Online Co-Op Missions Matching Rate (slot 3 only)."""
+        if self.slot_num != COOP_MATCH_RATE_SLOT:
+            raise ValueError("Co-Op Matching Rate lives in slot 3")
+        if not (0 <= value <= 0xFFFF):
+            raise ValueError(f"Co-Op Matching Rate must be 0..65535, got {value}")
+        _write_u16(self._data, COOP_MATCH_RATE_OFFSET, value)
 
     def verify(self) -> bool:
         return _verify_crcs(self._data, self._meta["entry_count"], self._meta["data_zone"])

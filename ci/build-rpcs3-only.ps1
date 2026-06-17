@@ -49,7 +49,9 @@ if (-not (Test-Path "$Rpcs3Dir\.git")) {
 Step "Reset rpcs3 source to pinned (no clean)"
 Push-Location $Rpcs3Dir
 git reset --hard $Rpcs3Commit
+$rc = $LASTEXITCODE
 Pop-Location
+if ($rc -ne 0) { throw "git reset to $Rpcs3Commit failed" }
 
 # 2. Apply the RPCS3 patch list parsed from build-all.ps1 (single source of truth).
 Step "Apply RPCS3 patches"
@@ -58,12 +60,55 @@ $rpcs3Patches = foreach ($line in $buildAll) {
     if ($line -match 'Apply-Patch\s+"SRC\\GIT\\rpcs3".*PATCH\\RPCS3\\([^"\\]+\.patch)') { $matches[1] }
 }
 if (-not $rpcs3Patches) { throw "Could not parse any RPCS3 patch from build-all.ps1" }
+
+# A patch that creates a file leaves it behind as untracked on the next run (the reset above
+# deliberately skips `git clean`), and re-applying the creating patch then fails on
+# "already exists". Delete exactly those leftovers before applying.
+foreach ($p in $rpcs3Patches) {
+    $lines = Get-Content "$RepoRoot\SRC\PATCH\RPCS3\$p"
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i - 1] -match '^--- /dev/null' -and $lines[$i] -match '^\+\+\+ b/(.+)$') {
+            $rel = $matches[1].Trim()
+            $leftover = Join-Path $Rpcs3Dir ($rel -replace '/', '\')
+            if (Test-Path $leftover) {
+                Remove-Item -Force $leftover
+                Write-Host "  removed leftover $rel"
+            }
+        }
+    }
+}
+
 foreach ($p in $rpcs3Patches) {
     Write-Host "Applying $p..."
     Push-Location $Rpcs3Dir
     git apply "$RepoRoot\SRC\PATCH\RPCS3\$p"
+    $rc = $LASTEXITCODE
     Pop-Location
+    if ($rc -ne 0) { throw "git apply failed for $p" }
     Write-Host "  OK" -ForegroundColor Green
+}
+
+# Force msbuild to recompile every patched translation unit. `git reset --hard`
+# followed by `git apply` should already bump each file's mtime, but the
+# incremental .obj cache occasionally outlives that write (clock granularity /
+# identical-content checkouts), leaving a stale object linked into rpcs3.exe.
+# Re-stamping the patched files' LastWriteTime to now makes the file tracker
+# treat them as dirty without a full /t:rpcs3:Rebuild of the whole project.
+Step "Touch patched files (force recompile)"
+$now = Get-Date
+$patchedFiles = foreach ($p in $rpcs3Patches) {
+    Get-Content "$RepoRoot\SRC\PATCH\RPCS3\$p" |
+        Where-Object { $_ -match '^\+\+\+ b/(.+)$' } |
+        ForEach-Object { $matches[1].Trim() }
+}
+foreach ($rel in ($patchedFiles | Sort-Object -Unique)) {
+    $full = Join-Path $Rpcs3Dir ($rel -replace '/', '\')
+    if (Test-Path $full) {
+        (Get-Item $full).LastWriteTime = $now
+        Write-Host "  touched $rel"
+    } else {
+        Write-Host "  WARN: patched file not found: $rel" -ForegroundColor Yellow
+    }
 }
 
 # 3. Prebuilt LLVM libs (extract only if the cold build did not already).

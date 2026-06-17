@@ -31,6 +31,9 @@ Name: "{app}\_app\RPCS3\portable"
 ; Entry point
 Source: "BIN\Play OPERATION ETERNAL LIBERATION (Windows).bat"; DestDir: "{app}";                Flags: ignoreversion
 
+; User-facing quick start
+Source: "BIN\READ_ME_FIRST.md";                    DestDir: "{app}";                 Flags: ignoreversion
+
 ; Launcher
 Source: "BIN\_app\launcher.py";                    DestDir: "{app}\_app";            Flags: ignoreversion
 Source: "BIN\_app\setup.bat";                      DestDir: "{app}\_app";            Flags: ignoreversion

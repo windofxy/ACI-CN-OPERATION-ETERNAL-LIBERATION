@@ -87,15 +87,12 @@ jobs:
           git clone "$RPCS3_URL" SRC/GIT/rpcs3
           ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tree-transparency.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-signaling-conninfo-disconnect.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-disconnect-handling.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-diagnostics.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-roomdata-notfound-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-reconnect.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-deadlock-fix.patch" )
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-freeze-tracer.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/lv2-cond-tracer.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-disconnect-fix.patch" )
           git clone "$RPCN_URL" SRC/GIT/rpcn
           ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
@@ -150,9 +147,28 @@ jobs:
       - name: Build rpcn
         run: ( cd SRC/GIT/rpcn && cargo build --release )
 
-      # OEL's package.sh produces the SRC + DOCKER tar.xz archives.
-      # On Linux we don't build an installer (no Inno Setup); the AppImage
-      # produced above by upstream's deploy-linux.sh is uploaded alongside.
+      # Mirror of the Windows job's staging step: the patched AppImage and
+      # rpcn binary land in BIN/_app so package.sh can build the client
+      # bundle. GuiConfigs/Icons ship in rpcs3's source tree under bin/.
+      - name: Stage rpcs3 + rpcn into BIN/_app
+        run: |
+          mkdir -p BIN/_app/RPCS3/portable BIN/_app/rpcn
+          cp "$BUILD_ARTIFACTSTAGINGDIRECTORY"/*.AppImage BIN/_app/RPCS3/
+          for sub in GuiConfigs Icons; do
+            if [ -d "SRC/GIT/rpcs3/bin/$sub" ]; then
+              cp -r "SRC/GIT/rpcs3/bin/$sub" "BIN/_app/RPCS3/portable/$sub"
+            fi
+          done
+          cp SRC/GIT/rpcn/target/release/rpcn BIN/_app/rpcn/
+
+      # Standalone CPython + PySide6 into BIN/_app/python, the Linux
+      # analogue of the embeddable Python the Windows installer bundles.
+      - name: Provision bundled Python runtime
+        run: bash ci/provision-linux-python.sh
+
+      # OEL's package.sh produces the SRC + DOCKER tar.xz archives plus the
+      # Linux client bundle (launcher, patched RPCS3 AppImage, rpcn, bundled
+      # Python) - the Linux counterpart of the Windows installer.
       - name: Build OEL release archives
         run: bash package.sh
 
@@ -168,18 +184,20 @@ jobs:
         with:
           name: OEL Linux
           path: |
-            ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}/*.AppImage
+            OP-ETERNAL-*-linux-x86_64.tar.xz
             OEL-SRC-*.tar.xz
             OEL-DOCKER-*.tar.xz
           compression-level: 0
           if-no-files-found: error
 
+      # The bare AppImage is deliberately not attached: users mistook it for
+      # the full kit. The client tarball above contains it.
       - name: Attach to GitHub Release (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}/*.AppImage
+            OP-ETERNAL-*-linux-x86_64.tar.xz
             OEL-SRC-*.tar.xz
             OEL-DOCKER-*.tar.xz
 
@@ -228,15 +246,13 @@ jobs:
           git clone "$RPCS3_URL" SRC/GIT/rpcs3
           ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tree-transparency.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-signaling-conninfo-disconnect.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-disconnect-handling.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-diagnostics.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-roomdata-notfound-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-reconnect.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-deadlock-fix.patch" )
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-deadlock-fix.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/framelimit-lock.patch" )
           git clone "$RPCN_URL" SRC/GIT/rpcn
           ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )

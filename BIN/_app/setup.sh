@@ -37,6 +37,13 @@ echo "Upgrading pip..."
 echo "Installing packages (cryptography + PySide6)..."
 "$PYDIR/bin/python3" -m pip install --quiet cryptography PySide6-Essentials
 
+# Dedicated interpreter copy for the game server: it gets the ports 80/443
+# capability (cap_net_bind_service) so the GUI interpreter never carries it.
+# cp -L resolves the venv symlink into a private real binary.
+if [ ! -e "$PYDIR/bin/python3-gameserver" ]; then
+    cp -L "$PYDIR/bin/python3" "$PYDIR/bin/python3-gameserver" 2>/dev/null || true
+fi
+
 echo
 echo "Setup complete."
 echo "============================================================"

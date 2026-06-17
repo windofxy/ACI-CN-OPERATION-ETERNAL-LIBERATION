@@ -1,0 +1,123 @@
+diff --git a/rpcs3/Emu/Cell/lv2/sys_cond.cpp b/rpcs3/Emu/Cell/lv2/sys_cond.cpp
+index f66146ae0..441f50353 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_cond.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_cond.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "sys_cond.h"
+ 
++#include "Emu/NP/freeze_tracer.h"
+ #include "util/asm.hpp"
+ 
+ LOG_CHANNEL(sys_cond);
+@@ -161,6 +162,8 @@ error_code sys_cond_signal(ppu_thread& ppu, u32 cond_id)
+ 	ppu.state += cpu_flag::wait;
+ 
+ 	sys_cond.trace("sys_cond_signal(cond_id=0x%x)", cond_id);
++	if (freeze_tracer::cond_trace_armed())
++		sys_cond.notice("[freeze-tracer] signal cond=0x%x by ppu=0x%x cia=0x%x", cond_id, ppu.id, ppu.cia);
+ 
+ 	while (true)
+ 	{
+@@ -233,6 +236,8 @@ error_code sys_cond_signal_all(ppu_thread& ppu, u32 cond_id)
+ 	ppu.state += cpu_flag::wait;
+ 
+ 	sys_cond.trace("sys_cond_signal_all(cond_id=0x%x)", cond_id);
++	if (freeze_tracer::cond_trace_armed())
++		sys_cond.notice("[freeze-tracer] signal_all cond=0x%x by ppu=0x%x cia=0x%x", cond_id, ppu.id, ppu.cia);
+ 
+ 	while (true)
+ 	{
+@@ -315,6 +320,8 @@ error_code sys_cond_signal_to(ppu_thread& ppu, u32 cond_id, u32 thread_id)
+ 	ppu.state += cpu_flag::wait;
+ 
+ 	sys_cond.trace("sys_cond_signal_to(cond_id=0x%x, thread_id=0x%x)", cond_id, thread_id);
++	if (freeze_tracer::cond_trace_armed())
++		sys_cond.notice("[freeze-tracer] signal_to cond=0x%x by ppu=0x%x cia=0x%x target=0x%x", cond_id, ppu.id, ppu.cia, thread_id);
+ 
+ 	while (true)
+ 	{
+@@ -588,3 +595,18 @@ error_code sys_cond_wait(ppu_thread& ppu, u32 cond_id, u64 timeout)
+ 
+ 	return not_an_error(ppu.gpr[3]);
+ }
++
++// Read-only snapshot of all parked PPU threads under lv2 conds. Called during a detected stall;
++// idm::select takes the idm read lock internally. The sleep queue is deliberately read without
++// the cond's mutex (the caller must never block); the queue can mutate underneath, which at worst
++// produces a stale line. Nodes are idm-owned threads, and the walk is capped so a torn view of the
++// list cannot loop the calling thread.
++void freeze_tracer::dump_parked_threads()
++{
++	idm::select<lv2_obj, lv2_cond>([](u32 id, lv2_cond& cond)
++	{
++		u32 walked = 0;
++		for (auto cpu = atomic_storage<ppu_thread*>::load(cond.sq); cpu && walked < 128; cpu = cpu->next_cpu, walked++)
++			sys_cond.notice("[freeze-tracer] park cond=0x%x ppu=0x%x cia=0x%x", id, cpu->id, cpu->cia);
++	});
++}
+diff --git a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+index 9e175c304..5c6e6d3ff 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+@@ -106,6 +106,9 @@ public:
+ 		std::uint64_t ft_last_sig2   = 0;
+ 		std::uint64_t ft_last_sig    = 0;
+ 		std::uint64_t ft_last_member = 0;
++		// [freeze-tracer] Layer-2: cond/park dump state.
++		auto ft_park_first = std::chrono::steady_clock::now();
++		bool ft_parked_dumped = false;
+ 
+ 		while (thread_ctrl::state() != thread_state::aborting)
+ 		{
+@@ -134,6 +137,8 @@ public:
+ 					{
+ 						ft_sig_stale = false;
+ 						sys_net.warning("[freeze-tracer] signaling progress resumed");
++						freeze_tracer::disarm_cond_trace();
++						ft_parked_dumped = false;
+ 					}
+ 				}
+ 				else
+@@ -148,6 +153,21 @@ public:
+ 							freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
+ 							freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
+ 							freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
++						// Layer-2: arm cond tracing and take the first park snapshot.
++						freeze_tracer::arm_cond_trace();
++						freeze_tracer::dump_parked_threads();
++						ft_park_first = ft_now;
++						ft_parked_dumped = false;
++					}
++					else if (ft_sig_stale && !ft_parked_dumped)
++					{
++						// Second snapshot ~10 s after the first: same thread+PC+cond = genuinely stuck.
++						const auto ft_park_ms = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::milliseconds>(ft_now - ft_park_first).count());
++						if (ft_park_ms >= 10000)
++						{
++							freeze_tracer::dump_parked_threads();
++							ft_parked_dumped = true;
++						}
+ 					}
+ 				}
+ 
+diff --git a/rpcs3/Emu/NP/freeze_tracer.h b/rpcs3/Emu/NP/freeze_tracer.h
+index 92b56031f..cac973aca 100644
+--- a/rpcs3/Emu/NP/freeze_tracer.h
++++ b/rpcs3/Emu/NP/freeze_tracer.h
+@@ -41,4 +41,15 @@ namespace freeze_tracer
+ 	inline void getter_sig2() { g_getter_sig2.fetch_add(1, std::memory_order_relaxed); }
+ 	inline void getter_sig() { g_getter_sig.fetch_add(1, std::memory_order_relaxed); }
+ 	inline void getter_member() { g_getter_member.fetch_add(1, std::memory_order_relaxed); }
++
++	// Layer-2 cond trace gate. Armed only during a detected stall; the three sys_cond signal
++	// syscalls check this with a single relaxed load and are otherwise unaffected.
++	inline std::atomic<bool> g_cond_trace_armed{false};
++	inline void arm_cond_trace()   { g_cond_trace_armed.store(true,  std::memory_order_relaxed); }
++	inline void disarm_cond_trace(){ g_cond_trace_armed.store(false, std::memory_order_relaxed); }
++	inline bool cond_trace_armed() { return g_cond_trace_armed.load(std::memory_order_relaxed); }
++
++	// Walks lv2 conds read-only via idm and logs each parked PPU with its cond id and game PC.
++	// Implemented in sys_cond.cpp so callers do not need to pull in idm or lv2_cond internals.
++	void dump_parked_threads();
+ }

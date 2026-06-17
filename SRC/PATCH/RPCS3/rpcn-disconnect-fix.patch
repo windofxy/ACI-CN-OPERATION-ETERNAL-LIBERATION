@@ -1,0 +1,322 @@
+diff --git a/rpcs3/Emu/NP/np_cache.cpp b/rpcs3/Emu/NP/np_cache.cpp
+index c072cd797..cb886cae4 100644
+--- a/rpcs3/Emu/NP/np_cache.cpp
++++ b/rpcs3/Emu/NP/np_cache.cpp
+@@ -406,4 +406,10 @@ namespace np
+ 		return std::nullopt;
+ 	}
+ 
++	bool cache_manager::has_active_rooms() const
++	{
++		std::lock_guard lock(mutex);
++		return !rooms.empty();
++	}
++
+ } // namespace np
+diff --git a/rpcs3/Emu/NP/np_cache.h b/rpcs3/Emu/NP/np_cache.h
+index bd0bd8a73..fcce3263f 100644
+--- a/rpcs3/Emu/NP/np_cache.h
++++ b/rpcs3/Emu/NP/np_cache.h
+@@ -82,6 +82,11 @@ namespace np
+ 		std::pair<error_code, std::optional<SceNpId>> get_npid(u64 room_id, u16 member_id) const;
+ 		std::optional<u16> get_memberid(u64 room_id, const SceNpId& npid) const;
+ 
++		// True if we currently cache at least one matching2 room. Used to tell apart
++		// online play (in a room) from single-player modes (free flight / campaign),
++		// which never create or join a matching2 room.
++		bool has_active_rooms() const;
++
+ 	private:
+ 		mutable shared_mutex mutex;
+ 		std::map<SceNpMatching2RoomId, room_cache> rooms;
+diff --git a/rpcs3/Emu/NP/np_handler.cpp b/rpcs3/Emu/NP/np_handler.cpp
+index 94e2cbafd..303a0d639 100644
+--- a/rpcs3/Emu/NP/np_handler.cpp
++++ b/rpcs3/Emu/NP/np_handler.cpp
+@@ -1111,6 +1111,218 @@ namespace np
+ 		while (thread_ctrl::state() != thread_state::aborting && !Emu.IsStopped())
+ 		{
+ 			bool sleep = true;
++
++			// === RPCN auto-reconnect ===========================================
++			// authentified && !connected means we were online and just lost the link.
++			if (is_psn_active && rpcn && rpcn->is_authentified() && !rpcn->is_connected())
++			{
++				rpcn_log.warning("RPCN reconnect: link lost while online; starting reconnect sequence");
++				rsx::overlays::queue_message(std::string("Connection to RPCN server lost, trying to reconnect..."));
++
++				// Wait briefly before the first attempt; lets the server free the old session
++				// so the first login does not immediately collide with a ghost entry.
++				constexpr u64 initial_grace_us = 5'000'000;
++				for (u64 waited = 0; waited < initial_grace_us; waited += 500'000)
++				{
++					if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
++						break;
++					thread_ctrl::wait_for(500'000);
++				}
++
++				static constexpr u64 connect_backoff_us[] = {5'000'000, 5'000'000, 5'000'000, 5'000'000, 5'000'000, 5'000'000, 10'000'000, 10'000'000, 10'000'000, 10'000'000, 10'000'000};
++				constexpr u32 max_connect_failures = static_cast<u32>(sizeof(connect_backoff_us) / sizeof(connect_backoff_us[0]));
++				constexpr u32 fast_phase_attempts  = 6;
++				constexpr u32 max_ghost_retries    = 2;
++				constexpr u64 ghost_retry_delay_us = 5'000'000;
++				constexpr u64 sp_ghost_retry_delay_us = 15'000'000;
++				constexpr u64 mp_patient_retry_delay_us = 15'000'000;
++				constexpr u64 mp_patient_max_us = 300'000'000;
++				const u64 reconnect_started_us = get_system_time();
++
++				u32 connect_failures = 0;
++				u32 ghost_retries    = 0;
++				bool ghost_gave_up   = false;
++				bool sp_ghost_notified = false;
++				bool permanent_failure = false;
++				bool mp_patient_notified = false;
++				u64 next_delay_us    = connect_backoff_us[0];
++				bool reconnected     = false;
++				bool give_up         = false;
++
++				while (!give_up && thread_ctrl::state() != thread_state::aborting && !Emu.IsStopped())
++				{
++					std::shared_ptr<rpcn::rpcn_client> local_rpcn;
++					{
++						std::lock_guard lock(mutex_rpcn);
++						rpcn->prepare_reconnect();
++						local_rpcn = rpcn;
++					}
++
++					// --- stage 1: TCP + TLS connection ---
++					rpcn_log.notice("RPCN reconnect: connecting (connect_failures=%u, ghost_retries=%u)...", connect_failures, ghost_retries);
++					if (auto state = local_rpcn->wait_for_connection(); state != rpcn::rpcn_state::failure_no_failure)
++					{
++						connect_failures++;
++						rpcn_log.error("RPCN reconnect: stage 1 (connection) FAILED: %s [%u/%u]", rpcn::rpcn_state_to_string(state), connect_failures, max_connect_failures);
++						if (connect_failures >= max_connect_failures)
++						{
++							rpcn_log.error("RPCN reconnect: too many connection failures, giving up");
++							give_up = true;
++						}
++						else
++						{
++							if (connect_failures == fast_phase_attempts)
++							{
++								rsx::overlays::queue_message(std::string("RPCN fast reconnect failed, increasing retry interval..."));
++							}
++							next_delay_us = connect_backoff_us[connect_failures];
++						}
++					}
++					else
++					{
++						rpcn_log.success("RPCN reconnect: stage 1 (connection) OK");
++						connect_failures = 0;
++
++						// --- stage 2: login / authentication ---
++						rpcn_log.notice("RPCN reconnect: authenticating...");
++						const auto auth_state = local_rpcn->wait_for_authentified();
++						if (auth_state == rpcn::rpcn_state::failure_no_failure)
++						{
++							rpcn_log.success("RPCN reconnect: stage 2 (login) OK");
++
++							// --- stage 3: signaling (public address) ---
++							rpcn_log.notice("RPCN reconnect: requesting signaling info...");
++							const u32 new_public_addr = local_rpcn->get_addr_sig();
++							if (new_public_addr)
++							{
++								public_ip_addr = new_public_addr;
++								local_ip_addr  = std::bit_cast<u32, be_t<u32>>(local_rpcn->get_addr_local());
++								is_psn_active   = true;
++								rpcn_log.success("RPCN reconnect: stage 3 (signaling) OK, public_addr=0x%08x; FULLY RECONNECTED", new_public_addr);
++								rsx::overlays::queue_message(localized_string_id::RPCN_SUCCESS_LOGGED_ON);
++								reconnected = true;
++								break;
++							}
++
++							rpcn_log.error("RPCN reconnect: stage 3 (signaling) FAILED: no public address from server");
++							connect_failures++;
++							if (connect_failures >= max_connect_failures)
++							{
++								rpcn_log.error("RPCN reconnect: too many signaling failures, giving up");
++								give_up = true;
++							}
++							else
++							{
++								next_delay_us = connect_backoff_us[connect_failures];
++							}
++						}
++						else if (auth_state == rpcn::rpcn_state::failure_id_already_logged_in)
++						{
++							// Ghost session: the server still holds the old connection entry; retry a
++							// few times while it clears asynchronously.
++							ghost_retries++;
++							rpcn_log.warning("RPCN reconnect: stage 2 (login) reports ALREADY LOGGED IN [%u/%u]; server still holds the old session.", ghost_retries, max_ghost_retries);
++							if (ghost_retries >= max_ghost_retries)
++							{
++								rpcn_log.error("RPCN reconnect: ghost session did not clear in time");
++								ghost_gave_up = true;
++								give_up = true;
++							}
++							else
++							{
++								next_delay_us = ghost_retry_delay_us;
++							}
++						}
++						else
++						{
++							rpcn_log.error("RPCN reconnect: stage 2 (login) PERMANENT failure: %s; giving up", rpcn::rpcn_state_to_string(auth_state));
++							rsx::overlays::queue_message(rpcn::rpcn_state_to_localized_string_id(auth_state));
++							permanent_failure = true;
++							give_up = true;
++						}
++					}
++
++					if (give_up && !permanent_failure)
++					{
++						if (!np_cache.has_active_rooms())
++						{
++							// Single-player: going offline would prompt a main-menu kick mid-mission;
++							// retry quietly until the link returns or emulation stops.
++							if (!sp_ghost_notified)
++							{
++								rpcn_log.warning("RPCN reconnect: link not restored, single-player (no active room); retrying quietly every %us", static_cast<u32>(sp_ghost_retry_delay_us / 1'000'000));
++								rsx::overlays::queue_message(std::string("RPCN reconnect error - still offline, but you are in single-player mode, continuing retries..."));
++								sp_ghost_notified = true;
++							}
++							else
++							{
++								rpcn_log.notice("RPCN reconnect: still offline (single-player), continuing quiet retries.");
++							}
++							give_up          = false;
++							ghost_gave_up    = false;
++							connect_failures = 0;
++							ghost_retries    = 0;
++							next_delay_us    = sp_ghost_retry_delay_us;
++						}
++						else if ((get_system_time() - reconnect_started_us) < mp_patient_max_us)
++						{
++							// Multiplayer: keep retrying patiently while P2P peers hold the match,
++							// but cap total wait time (ghost session typically clears within 2 min).
++							if (!mp_patient_notified)
++							{
++								rpcn_log.warning("RPCN reconnect: link not restored, in a room; retrying every %us for up to %us", static_cast<u32>(mp_patient_retry_delay_us / 1'000'000), static_cast<u32>(mp_patient_max_us / 1'000'000));
++								rsx::overlays::queue_message(std::string("RPCN connection lost during a match, trying to recover..."));
++								mp_patient_notified = true;
++							}
++							else
++							{
++								rpcn_log.notice("RPCN reconnect: still offline (in a room), continuing retries (%us elapsed).", static_cast<u32>((get_system_time() - reconnect_started_us) / 1'000'000));
++							}
++							give_up          = false;
++							ghost_gave_up    = false;
++							connect_failures = 0;
++							ghost_retries    = 0;
++							next_delay_us    = mp_patient_retry_delay_us;
++						}
++						else
++						{
++							rpcn_log.error("RPCN reconnect: in a room but patience window (%us) elapsed without recovery; going offline.", static_cast<u32>(mp_patient_max_us / 1'000'000));
++						}
++					}
++
++					if (reconnected || give_up)
++						break;
++
++					rpcn_log.notice("RPCN reconnect: waiting %us before next attempt", static_cast<u32>(next_delay_us / 1'000'000));
++					for (u64 waited = 0; waited < next_delay_us; waited += 500'000)
++					{
++						if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
++							break;
++						thread_ctrl::wait_for(500'000);
++					}
++				}
++
++				if (!reconnected)
++				{
++					if (give_up)
++					{
++						rpcn_log.error("RPCN reconnect: NOT reconnected; marking PSN offline (game will go offline gracefully)");
++						if (ghost_gave_up)
++						{
++							rsx::overlays::queue_message(std::string("RPCN error - user already logged in (ghost session), going offline"));
++						}
++						else
++						{
++							rsx::overlays::queue_message(std::string("RPCN reconnect failed - going offline"));
++						}
++						is_psn_active = false;
++					}
++				}
++
++				continue;
++			}
++			// === end RPCN auto-reconnect =======================================
++
+ 			if (rpcn)
+ 			{
+ 				std::lock_guard lock(mutex_rpcn);
+diff --git a/rpcs3/Emu/NP/rpcn_client.cpp b/rpcs3/Emu/NP/rpcn_client.cpp
+index 96ab505ab..a88650e50 100644
+--- a/rpcs3/Emu/NP/rpcn_client.cpp
++++ b/rpcs3/Emu/NP/rpcn_client.cpp
+@@ -1304,6 +1304,15 @@ namespace rpcn
+ 		forge_send(CommandType::ResetState, rpcn_request_counter.fetch_add(1), data);
+ 	}
+ 
++	void rpcn_client::prepare_reconnect()
++	{
++		// Force a clean re-handshake on the existing client: free the dead
++		// socket/SSL and clear the sticky error so wait_for_connection() runs connect()
++		// and wait_for_authentified() runs login() again.
++		disconnect();
++		state = rpcn_state::failure_no_failure;
++	}
++
+ 	ErrorType rpcn_client::create_user(std::string_view npid, std::string_view password, std::string_view online_name, std::string_view avatar_url, std::string_view email)
+ 	{
+ 		std::vector<u8> data;
+diff --git a/rpcs3/Emu/NP/rpcn_client.h b/rpcs3/Emu/NP/rpcn_client.h
+index daa60d90e..7da7b417e 100644
+--- a/rpcs3/Emu/NP/rpcn_client.h
++++ b/rpcs3/Emu/NP/rpcn_client.h
+@@ -290,6 +290,7 @@ namespace rpcn
+ 		rpcn_state wait_for_authentified();
+ 		bool terminate_connection();
+ 		void reset_state();
++		void prepare_reconnect();
+ 
+ 		void get_friends(friend_data& friend_infos);
+ 		void get_friends_and_register_cb(friend_data& friend_infos, friend_cb_func cb_func, void* cb_param);
+diff --git a/rpcs3/Emu/NP/np_requests.cpp b/rpcs3/Emu/NP/np_requests.cpp
+index d9dd6dc..762f6f2 100644
+--- a/rpcs3/Emu/NP/np_requests.cpp
++++ b/rpcs3/Emu/NP/np_requests.cpp
+@@ -522,6 +522,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		case rpcn::ErrorType::Unauthorized: error_code = SCE_NP_MATCHING2_SERVER_ERROR_FORBIDDEN; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SetRoomDataExternal: %s", error);
+ 		}
+@@ -555,6 +556,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to GetRoomDataInternal: %s", error);
+ 		}
+ 
+@@ -611,6 +613,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SetRoomDataInternal: %s", error);
+ 		}
+ 
+@@ -807,6 +810,7 @@ namespace np
+ 		{
+ 		case rpcn::ErrorType::NoError: break;
+ 		case rpcn::ErrorType::RoomMissing: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
++		case rpcn::ErrorType::NotFound: error_code = SCE_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM; break;
+ 		case rpcn::ErrorType::Unauthorized: error_code = SCE_NP_MATCHING2_SERVER_ERROR_FORBIDDEN; break;
+ 		default: fmt::throw_exception("Unexpected error in reply to SendRoomMessage: %s", error);
+ 		}

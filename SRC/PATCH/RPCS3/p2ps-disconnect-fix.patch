@@ -1,67 +1,42 @@
-diff --git a/rpcs3/Emu/Cell/lv2/sys_net.cpp b/rpcs3/Emu/Cell/lv2/sys_net.cpp
-index a860d43b1..2cab9f46a 100644
---- a/rpcs3/Emu/Cell/lv2/sys_net.cpp
-+++ b/rpcs3/Emu/Cell/lv2/sys_net.cpp
-@@ -1452,6 +1452,8 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 	sys_net_fd_set rexcept{}, _exceptfds{};
- 	u64 timeout = !_timeout ? 0 : _timeout->tv_sec * 1000000ull + _timeout->tv_usec;
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp.cpp b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+index 03bc8c4c3..417d624d2 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+@@ -6908,6 +6908,12 @@ error_code sceNpSignalingGetConnectionInfo(u32 ctx_id, u32 conn_id, s32 code, vm
+ 	if (!si)
+ 		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
  
-+	sys_net.trace("bnet_select: nfds=%d _timeout=%s timeout_us=%llu", nfds, _timeout ? "non-null" : "null", timeout);
++	// A peer whose signaling connection has gone INACTIVE (P2PS timeout etc.) keeps its
++	// si until cleanup; reporting stale connection info for it hides the disconnect from
++	// titles that poll this getter. Mirror the matching2 variant and report it gone.
++	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
 +
- 	if (nfds > 0 && nfds <= 1024)
+ 	switch (code)
  	{
- 		if (readfds)
-@@ -1461,8 +1463,11 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 		if (exceptfds)
- 			_exceptfds = *exceptfds;
+ 		case SCE_NP_SIGNALING_CONN_INFO_RTT:
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+index 1fbef4d74..05bb06d35 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+@@ -716,6 +716,15 @@ error_code sceNpMatching2SignalingGetConnectionInfo(
+ 	if (!si)
+ 		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
  
-+		sys_net.trace("bnet_select: acquiring mutex_thread_loop");
- 		std::lock_guard nw_lock(g_fxo->get<network_context>().mutex_thread_loop);
-+		sys_net.trace("bnet_select: acquired mutex_thread_loop, acquiring g_mutex");
- 		reader_lock lock(id_manager::g_mutex);
-+		sys_net.trace("bnet_select: both mutexes acquired, entering first-pass loop nfds=%d", nfds);
- 
- 		std::vector<::pollfd> _fds(nfds);
- #ifdef _WIN32
-@@ -1492,7 +1497,9 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 
- 			if (auto sock = idm::check_unlocked<lv2_socket>((lv2_socket::id_base & -1024) + i))
- 			{
-+				sys_net.trace("bnet_select: first-pass fd=%d calling sock->select", i);
- 				auto [read_set, write_set, except_set] = sock->select(selected, _fds[i]);
-+				sys_net.trace("bnet_select: first-pass fd=%d read=%d write=%d except=%d", i, static_cast<int>(read_set), static_cast<int>(write_set), static_cast<int>(except_set));
- 
- 				if (read_set || write_set || except_set)
- 				{
-@@ -1524,6 +1531,7 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 			}
- 		}
- 
-+		sys_net.trace("bnet_select: after first-pass signaled=%d, calling native poll", signaled.load());
- #ifdef _WIN32
- 		windows_poll(_fds, nfds, 0, connecting);
- #else
-@@ -1543,6 +1551,10 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 			}
- 		}
- 
-+		sys_net.trace("bnet_select: after native poll signaled=%d, _timeout=%s !timeout=%d → %s",
-+			signaled.load(), _timeout ? "non-null" : "null", !timeout,
-+			((_timeout && !timeout) || signaled) ? "IMMEDIATE_RETURN" : "WILL_SLEEP");
++	// A peer whose P2PS link has timed out is marked INACTIVE by
++	// signaling_handler::force_disconnect_by_addr, but its signaling_info is kept
++	// (the npid->conn_id mapping and the si both survive). The game polls this getter
++	// to track peer liveness and only reacts to a negative return, so reporting stale
++	// "connected" info for a dead peer hides the disconnect and can hang a mission that
++	// waits on that peer. Report the connection as gone instead.
++	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
++		return SCE_NP_SIGNALING_ERROR_CONN_NOT_FOUND;
 +
- 		if ((_timeout && !timeout) || signaled)
- 		{
- 			if (readfds)
-@@ -1607,6 +1619,7 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
- 			}
- 		}
- 
-+		sys_net.trace("bnet_select: ENTERING SLEEP timeout_us=%llu signaled=%d _timeout=%s", timeout, signaled.load(), _timeout ? "non-null" : "null");
- 		lv2_obj::sleep(ppu, timeout);
- 	}
- 	else
+ 	switch (code)
+ 	{
+ 		case SCE_NP_SIGNALING_CONN_INFO_RTT:
 diff --git a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
-index cb5955745..209deb26b 100644
+index cb5955745..55d282863 100644
 --- a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
 +++ b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
 @@ -4,6 +4,7 @@
@@ -107,7 +82,28 @@ index cb5955745..209deb26b 100644
  				}
  				it = msgs.erase(it);
  				continue;
-@@ -111,35 +117,47 @@ public:
+@@ -100,7 +106,19 @@ public:
+ 			if (thread_ctrl::state() == thread_state::aborting)
+ 				return;
+ 
+-			std::lock_guard lock(data_mutex);
++			// Teardown is collected here and run after data_mutex is released:
++			// force_disconnect_by_addr and close_stream take the signaling/socket mutexes
++			// that handle_connected holds before data_mutex, so tearing down under the lock
++			// deadlocks.
++			struct dead_peer
++			{
++				s32 sock_id;
++				u32 addr;
++				u16 port;
++			};
++			std::vector<dead_peer> dead_peers;
++
++			std::unique_lock lock(data_mutex);
+ 
+ 			const auto now = steady_clock::now();
+ 			// Check for messages that haven't been acked
+@@ -111,35 +129,45 @@ public:
  					break;
  
  				// reply is late, increases rtt
@@ -135,28 +131,32 @@ index cb5955745..209deb26b 100644
 -				if (rtt.num_retries >= 10)
 +				if (rtt.num_retries >= 15)
  				{
- 					// Too many retries, need to notify the socket that the connection is dead
+-					// Too many retries, need to notify the socket that the connection is dead
 -					idm::check<lv2_socket>(msg.sock_id, [&](lv2_socket& sock)
++					// Too many retries, the connection is dead; defer teardown (see dead_peers).
 +					sys_net.error("[P2PS] Too many retries on socket %d, closing the stream", sock_id);
-+					// Without signaling INACTIVE before P2PS POLLHUP, P2PS timeout fires
-+					// ~18s before RPCN's member-left notification and the lobby stalls
-+					// for that gap. Dispatching the event here closes the window between
-+					// teardown and signaling.
-+					g_fxo->get<named_thread<signaling_handler>>().force_disconnect_by_addr(
-+						msg.dst_addr.sin_addr.s_addr,
-+						std::bit_cast<u16, be_t<u16>>(msg.dst_addr.sin_port));
-+					idm::check<lv2_socket>(sock_id, [&](lv2_socket& sock)
++					dead_peers.push_back({sock_id, msg.dst_addr.sin_addr.s_addr, std::bit_cast<u16, be_t<u16>>(msg.dst_addr.sin_port)});
++					// Remove all messages for this socket while data_mutex is held. The sweep
++					// also erases the element at it, so advance it alongside jt to keep the
++					// outer loop iterator valid.
++					for (auto jt = msgs.begin(); jt != msgs.end();)
++					{
++						if (jt->second.sock_id != sock_id)
  						{
 -							sys_net.error("[P2PS] Too many retries, closing the stream");
- 							ensure(sock.get_type() == SYS_NET_SOCK_STREAM_P2P);
- 							auto& sock_p2ps = reinterpret_cast<lv2_socket_p2ps&>(sock);
- 							sock_p2ps.close_stream();
- 						});
- 					it = msgs.erase(it);
-+					// Remove all remaining messages for this socket while data_mutex is held.
-+					// close_stream_nl cannot call clear_all_messages here (would re-acquire data_mutex -> deadlock).
-+					for (auto jt = msgs.begin(); jt != msgs.end(); )
-+						jt = (jt->second.sock_id == sock_id) ? msgs.erase(jt) : std::next(jt);
+-							ensure(sock.get_type() == SYS_NET_SOCK_STREAM_P2P);
+-							auto& sock_p2ps = reinterpret_cast<lv2_socket_p2ps&>(sock);
+-							sock_p2ps.close_stream();
+-						});
+-					it = msgs.erase(it);
++							++jt;
++							continue;
++						}
++						if (jt == it)
++							it = jt = msgs.erase(jt);
++						else
++							jt = msgs.erase(jt);
++					}
  					continue;
  				}
  
@@ -166,18 +166,71 @@ index cb5955745..209deb26b 100644
  					{
  						ensure(sock.get_type() == SYS_NET_SOCK_STREAM_P2P);
  						auto& sock_p2ps = reinterpret_cast<lv2_socket_p2ps&>(sock);
-@@ -163,6 +181,10 @@ public:
+@@ -153,8 +181,8 @@ public:
+ 								continue;
+ 							}
+ 
++							// Send failed; the stream is dead. close_stream is deferred (see dead_peers).
+ 							sys_net.error("[P2PS] Resending the packet failed(%s), closing the stream", err);
+-							sock_p2ps.close_stream();
+ 							return false;
+ 						}
+ 						return true;
+@@ -162,7 +190,26 @@ public:
+ 
  				if (!res || !res.ret)
  				{
- 					it = msgs.erase(it);
-+					// Remove all remaining messages for this socket (send failed -> stream closed,
-+					// or socket gone). data_mutex already held; cannot call clear_all_messages.
-+					for (auto jt = msgs.begin(); jt != msgs.end(); )
-+						jt = (jt->second.sock_id == sock_id) ? msgs.erase(jt) : std::next(jt);
+-					it = msgs.erase(it);
++					// Send failed: the stream is dead, defer teardown (see dead_peers). A missing
++					// socket means a local close() raced us; only drop its messages, the peer is
++					// not known dead.
++					if (res)
++						dead_peers.push_back({sock_id, msg.dst_addr.sin_addr.s_addr, std::bit_cast<u16, be_t<u16>>(msg.dst_addr.sin_port)});
++					// Remove all messages for this socket while data_mutex is held. The sweep
++					// also erases the element at it, so advance it alongside jt to keep the
++					// outer loop iterator valid.
++					for (auto jt = msgs.begin(); jt != msgs.end();)
++					{
++						if (jt->second.sock_id != sock_id)
++						{
++							++jt;
++							continue;
++						}
++						if (jt == it)
++							it = jt = msgs.erase(jt);
++						else
++							jt = msgs.erase(jt);
++					}
  					continue;
  				}
  
-@@ -213,12 +235,14 @@ private:
+@@ -188,6 +235,25 @@ public:
+ 			{
+ 				timeout = atomic_wait_timeout::inf;
+ 			}
++
++			lock.unlock();
++
++			// data_mutex released. Post each dead peer's signaling disconnect to the signaling
++			// thread (queue_force_disconnect just enqueues and wakes it) rather than reaching into
++			// its data_mutex from this monitor thread, then close the local stream - a socket-layer
++			// op that never touches signaling state.
++			for (const auto& dp : dead_peers)
++			{
++				g_fxo->get<named_thread<signaling_handler>>().queue_force_disconnect(dp.addr, dp.port);
++				idm::check<lv2_socket>(dp.sock_id, [](lv2_socket& sock)
++					{
++						// The id can be freed and reused between collection and this point;
++						// skip it unless it is still a P2PS stream.
++						if (sock.get_type() != SYS_NET_SOCK_STREAM_P2P)
++							return;
++						reinterpret_cast<lv2_socket_p2ps&>(sock).close_stream();
++					});
++			}
+ 		}
+ 	}
+ 
+@@ -213,12 +279,14 @@ private:
  		u64 seq = 0;
  		steady_clock::time_point initial_sendtime{};
  	};
@@ -194,7 +247,7 @@ index cb5955745..209deb26b 100644
  	};
  	std::unordered_map<s32, rtt_info> rtts; // (sock_id, rtt)
  };
-@@ -407,8 +431,10 @@ bool lv2_socket_p2ps::handle_connected(p2ps_encapsulated_tcp* tcp_header, u8* da
+@@ -407,8 +475,10 @@ bool lv2_socket_p2ps::handle_connected(p2ps_encapsulated_tcp* tcp_header, u8* da
  		case p2ps_tcp_flags::RST:
  		case p2ps_tcp_flags::FIN:
  		{
@@ -206,7 +259,7 @@ index cb5955745..209deb26b 100644
  			return false;
  		}
  		default:
-@@ -543,6 +569,8 @@ void lv2_socket_p2ps::close_stream_nl(nt_p2p_port* p2p_port)
+@@ -543,6 +613,8 @@ void lv2_socket_p2ps::close_stream_nl(nt_p2p_port* p2p_port)
  {
  	status = p2ps_stream_status::stream_closed;
  
@@ -215,7 +268,7 @@ index cb5955745..209deb26b 100644
  	for (auto it = p2p_port->bound_p2p_streams.begin(); it != p2p_port->bound_p2p_streams.end();)
  	{
  		if (it->second == lv2_id)
-@@ -553,8 +581,25 @@ void lv2_socket_p2ps::close_stream_nl(nt_p2p_port* p2p_port)
+@@ -553,8 +625,25 @@ void lv2_socket_p2ps::close_stream_nl(nt_p2p_port* p2p_port)
  		it++;
  	}
  
@@ -243,7 +296,7 @@ index cb5955745..209deb26b 100644
  }
  
  void lv2_socket_p2ps::close_stream()
-@@ -829,7 +874,7 @@ std::optional<std::tuple<s32, std::vector<u8>, sys_net_sockaddr>> lv2_socket_p2p
+@@ -829,7 +918,7 @@ std::optional<std::tuple<s32, std::vector<u8>, sys_net_sockaddr>> lv2_socket_p2p
  		if (status == p2ps_stream_status::stream_closed)
  		{
  			sys_net.error("[P2PS] Called recvfrom on closed socket!");
@@ -252,7 +305,7 @@ index cb5955745..209deb26b 100644
  		}
  
  		if (so_nbio || (flags & SYS_NET_MSG_DONTWAIT))
-@@ -1003,11 +1048,25 @@ void lv2_socket_p2ps::poll(sys_net_pollfd& sn_pfd, [[maybe_unused]] pollfd& nati
+@@ -1003,6 +1092,14 @@ void lv2_socket_p2ps::poll(sys_net_pollfd& sn_pfd, [[maybe_unused]] pollfd& nati
  			sn_pfd.revents |= SYS_NET_POLLOUT;
  		}
  	}
@@ -267,86 +320,392 @@ index cb5955745..209deb26b 100644
  }
  
  std::tuple<bool, bool, bool> lv2_socket_p2ps::select(bs_t<lv2_socket::poll_t> selected, [[maybe_unused]] pollfd& native_pfd)
- {
-+	sys_net.trace("[P2PS] select entry: acquiring mutex (lv2_id=%d)", lv2_id);
- 	std::lock_guard lock(mutex);
-+	sys_net.trace("[P2PS] select mutex acquired (lv2_id=%d status=%s data_available=%u)", lv2_id,
-+		status == p2ps_stream_status::stream_closed ? "CLOSED" :
-+		status == p2ps_stream_status::stream_connected ? "CONNECTED" :
-+		status == p2ps_stream_status::stream_listening ? "LISTENING" : "HANDSHAKING",
-+		data_available);
- 
- 	bool read_set  = false;
- 	bool write_set = false;
-@@ -1035,6 +1094,14 @@ std::tuple<bool, bool, bool> lv2_socket_p2ps::select(bs_t<lv2_socket::poll_t> se
+@@ -1035,6 +1132,13 @@ std::tuple<bool, bool, bool> lv2_socket_p2ps::select(bs_t<lv2_socket::poll_t> se
  			read_set = true;
  		}
  	}
 +	else if (status == p2ps_stream_status::stream_closed)
 +	{
++		// Wake a select() blocked on a closed stream so the guest's read returns (and the
++		// subsequent recvfrom reports ECONNRESET) instead of hanging on the dead peer.
 +		if (selected & lv2_socket::poll_t::read)
-+		{
-+			sys_net.trace("[P2PS] select on CLOSED socket, signaling read_set=true");
 +			read_set = true;
-+		}
 +	}
  
  	return {read_set, write_set, false};
  }
-diff --git a/rpcs3/Emu/Cell/lv2/sys_net/sys_net_helpers.cpp b/rpcs3/Emu/Cell/lv2/sys_net/sys_net_helpers.cpp
-index 6bc03320c..9f35227ae 100644
---- a/rpcs3/Emu/Cell/lv2/sys_net/sys_net_helpers.cpp
-+++ b/rpcs3/Emu/Cell/lv2/sys_net/sys_net_helpers.cpp
-@@ -245,11 +245,12 @@ void windows_poll(std::vector<pollfd>& fds, unsigned long nfds, int timeout, std
- 	ensure(connecting.size() >= nfds);
+diff --git a/rpcs3/Emu/NP/np_cache.cpp b/rpcs3/Emu/NP/np_cache.cpp
+index 4d70cacaa..c072cd797 100644
+--- a/rpcs3/Emu/NP/np_cache.cpp
++++ b/rpcs3/Emu/NP/np_cache.cpp
+@@ -109,7 +109,18 @@ namespace np
+ 			return false;
+ 		}
  
- 	// Don't call WSAPoll with zero nfds (errors 10022 or 10038)
--	if (std::none_of(fds.begin(), fds.begin() + nfds, [](pollfd& pfd)
--			{
--				return pfd.fd != INVALID_SOCKET;
--			}))
-+	const auto valid_count = std::count_if(fds.begin(), fds.begin() + nfds, [](const pollfd& pfd) { return pfd.fd != INVALID_SOCKET; });
-+	sys_net.trace("windows_poll: nfds=%u timeout=%d valid_fds=%lld", nfds, timeout, valid_count);
+-		rooms.erase(member_id);
++		// Erase the member from the room's member list. This previously erased from the
++		// rooms map keyed by member_id - a no-op, since member ids are not room ids - which
++		// left the departed member in the room's member list. The member-list getters then
++		// kept returning that member even after its leave callback fired, leaving a "ghost"
++		// slot that was occupied but showed no player. Returning false when the member was
++		// not present also keeps the caller's leave-callback guard idempotent.
++		if (::at32(rooms, room_id).members.erase(member_id) == 0)
++		{
++			np_cache.warning("np_cache::del_member: member(%d) not present in room(%d) (already removed?)", member_id, room_id);
++			return false;
++		}
 +
-+	if (valid_count == 0)
- 	{
-+		sys_net.trace("windows_poll: all INVALID_SOCKET, skipping WSAPoll");
- 		if (timeout > 0)
- 		{
- 			Sleep(timeout);
-@@ -258,14 +259,19 @@ void windows_poll(std::vector<pollfd>& fds, unsigned long nfds, int timeout, std
- 		return;
+ 		return true;
  	}
  
-+	sys_net.trace("windows_poll: calling WSAPoll with %lld valid fds", valid_count);
- 	int r = ::WSAPoll(fds.data(), nfds, timeout);
- 
- 	if (r == SOCKET_ERROR)
- 	{
--		sys_net.error("WSAPoll failed: %s", fmt::win_error{static_cast<unsigned long>(WSAGetLastError()), nullptr});
-+		const auto wsa_err = WSAGetLastError();
-+		sys_net.error("WSAPoll failed: %s", fmt::win_error{static_cast<unsigned long>(wsa_err), nullptr});
-+		sys_net.trace("windows_poll: WSAPoll SOCKET_ERROR wsa_err=%u, all revents will be 0", wsa_err);
- 		return;
- 	}
- 
-+	sys_net.trace("windows_poll: WSAPoll returned %d ready fds", r);
-+
- 	for (unsigned long i = 0; i < nfds; i++)
- 	{
- 		if (connecting[i])
 diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
-index a4c59763c..9fd34ac45 100644
+index a4c59763c..e9dc2f532 100644
 --- a/rpcs3/Emu/NP/signaling_handler.cpp
 +++ b/rpcs3/Emu/NP/signaling_handler.cpp
-@@ -866,3 +866,30 @@ std::optional<u32> signaling_handler::get_conn_id_from_addr(u32 addr, u16 port)
+@@ -83,9 +83,9 @@ void signaling_handler::clear_match2_ctx()
+ 	match2_ctx_lst.clear();
+ }
+ 
+-void signaling_handler::signal_sig_callback(u32 conn_id, s32 event, s32 error_code)
++void signaling_handler::signal_sig_callback(const std::vector<u32>& sig_ctxs, u32 conn_id, s32 event, s32 error_code) const
+ {
+-	for (const auto& ctx_id : sig_ctx_lst)
++	for (const auto& ctx_id : sig_ctxs)
+ 	{
+ 		const auto ctx = get_signaling_context(ctx_id);
+ 
+@@ -106,12 +106,12 @@ void signaling_handler::signal_sig_callback(u32 conn_id, s32 event, s32 error_co
+ 	}
+ 
+ 	// extended callback also receives normal events
+-	signal_ext_sig_callback(conn_id, event, error_code);
++	signal_ext_sig_callback(sig_ctxs, conn_id, event, error_code);
+ }
+ 
+-void signaling_handler::signal_ext_sig_callback(u32 conn_id, s32 event, s32 error_code) const
++void signaling_handler::signal_ext_sig_callback(const std::vector<u32>& sig_ctxs, u32 conn_id, s32 event, s32 error_code) const
+ {
+-	for (const auto ctx_id : sig_ctx_lst)
++	for (const auto ctx_id : sig_ctxs)
+ 	{
+ 		const auto ctx = get_signaling_context(ctx_id);
+ 
+@@ -132,11 +132,11 @@ void signaling_handler::signal_ext_sig_callback(u32 conn_id, s32 event, s32 erro
+ 	}
+ }
+ 
+-void signaling_handler::signal_sig2_callback(u64 room_id, u16 member_id, SceNpMatching2Event event, s32 error_code) const
++void signaling_handler::signal_sig2_callback(const std::vector<u16>& match2_ctxs, u64 room_id, u16 member_id, SceNpMatching2Event event, s32 error_code) const
+ {
+ 	if (room_id)
+ 	{
+-		for (const auto ctx_id : match2_ctx_lst)
++		for (const auto ctx_id : match2_ctxs)
+ 		{
+ 			const auto ctx = get_match2_context(ctx_id);
+ 
+@@ -406,6 +406,19 @@ void signaling_handler::operator()()
+ 		if (thread_ctrl::state() == thread_state::aborting)
+ 			return;
+ 
++		// Apply force-disconnects posted by the P2PS timeout monitor. They are drained here, on
++		// the signaling thread, so the disconnect runs through the same locked path as every other
++		// signaling state change - the monitor thread only ever touches m_pending_disc_mutex.
++		std::vector<std::pair<u32, u16>> pending_disc;
++		{
++			std::lock_guard plock(m_pending_disc_mutex);
++			pending_disc.swap(m_pending_disc);
++		}
++		for (const auto& [addr, port] : pending_disc)
++			force_disconnect_by_addr(addr, port);
++
++		deferred_work work;
++		{
+ 		std::lock_guard lock(data_mutex);
+ 
+ 		process_incoming_messages();
+@@ -425,7 +438,7 @@ void signaling_handler::operator()()
+ 			{
+ 				// We had no connection to opponent for 60 seconds, consider the connection dead
+ 				auto retire_info = sig.sig_info;
+-				sign_log.notice("Timeout disconnection");
++				sign_log.warning("Signaling timeout (no packets for 60s): conn_id %d, member(%d) of room(%d)", retire_info->conn_id, retire_info->member_id, retire_info->room_id);
+ 				update_si_status(retire_info, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
+ 				retire_packet(retire_info, signal_ping); // Retire ping packet if necessary
+ 				break; // qpackets has been emptied of all packets for this user so we're requeuing
+@@ -502,6 +515,10 @@ void signaling_handler::operator()()
+ 		{
+ 			timeout = atomic_wait_timeout::inf;
+ 		}
++
++		work = take_deferred();
++		}
++		dispatch_deferred(work);
+ 	}
+ }
+ 
+@@ -584,17 +601,25 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
+ 	{
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_ACTIVE;
+ 
+-		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_ESTABLISHED, error_code);
+-		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Established, error_code);
++		m_deferred_cbs.push_back({deferred_callback::kind::sig, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_ESTABLISHED, error_code});
++		m_deferred_cbs.push_back({deferred_callback::kind::sig2, 0, si->room_id, si->member_id, static_cast<s32>(SCE_NP_MATCHING2_SIGNALING_EVENT_Established), error_code});
+ 
+ 		if (si->op_activated)
+-			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
++			m_deferred_cbs.push_back({deferred_callback::kind::ext, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK});
+ 	}
+ 	else if ((si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_PENDING || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE) && new_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+ 	{
++		// Edge-triggered: only logged on the actual ACTIVE/PENDING -> INACTIVE transition,
++		// so a healthy session prints nothing and a real loss prints exactly once. A graceful
++		// teardown (peer left, or local terminate) is expected and logs at notice; an abnormal
++		// loss (timeout, link death) logs at warning so it stands out in a shared log.
++		if (static_cast<u32>(error_code) == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_PEER || static_cast<u32>(error_code) == SCE_NP_SIGNALING_ERROR_TERMINATED_BY_MYSELF)
++			sign_log.notice("Signaling connection closed: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
++		else
++			sign_log.warning("Signaling connection lost: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
+-		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_DEAD, error_code);
+-		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Dead, error_code);
++		m_deferred_cbs.push_back({deferred_callback::kind::sig, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_DEAD, error_code});
++		m_deferred_cbs.push_back({deferred_callback::kind::sig2, 0, si->room_id, si->member_id, static_cast<s32>(SCE_NP_MATCHING2_SIGNALING_EVENT_Dead), error_code});
+ 		retire_all_packets(si);
+ 	}
+ }
+@@ -609,15 +634,15 @@ void signaling_handler::update_ext_si_status(std::shared_ptr<signaling_info>& si
+ 		si->op_activated = true;
+ 
+ 		if (si->conn_status != SCE_NP_SIGNALING_CONN_STATUS_ACTIVE)
+-			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_PEER_ACTIVATED, CELL_OK);
++			m_deferred_cbs.push_back({deferred_callback::kind::ext, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_EXT_PEER_ACTIVATED, CELL_OK});
+ 		else
+-			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
++			m_deferred_cbs.push_back({deferred_callback::kind::ext, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK});
+ 	}
+ 	else if (!op_activated && si->op_activated)
+ 	{
+ 		si->op_activated = false;
+ 
+-		signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_PEER_DEACTIVATED, CELL_OK);
++		m_deferred_cbs.push_back({deferred_callback::kind::ext, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_EXT_PEER_DEACTIVATED, CELL_OK});
+ 	}
+ }
+ 
+@@ -627,7 +652,7 @@ void signaling_handler::set_self_sig_info(SceNpId& npid)
+ 	sig_packet.npid = npid;
+ }
+ 
+-void signaling_handler::send_signaling_packet(signaling_packet& sp, u32 addr, u16 port) const
++void signaling_handler::send_signaling_packet(signaling_packet& sp, u32 addr, u16 port)
+ {
+ 	std::vector<u8> packet(sizeof(signaling_packet) + VPORT_0_HEADER_SIZE);
+ 	reinterpret_cast<le_t<u16>&>(packet[0]) = 0; // VPort 0
+@@ -636,29 +661,70 @@ void signaling_handler::send_signaling_packet(signaling_packet& sp, u32 addr, u1
+ 	sp.sent_port = port;
+ 	memcpy(packet.data() + VPORT_0_HEADER_SIZE, &sp, sizeof(signaling_packet));
+ 
+-	sockaddr_in dest;
+-	memset(&dest, 0, sizeof(sockaddr_in));
+-	dest.sin_family = AF_INET;
+-	dest.sin_addr.s_addr = addr;
+-	dest.sin_port = std::bit_cast<u16, be_t<u16>>(port);
++	// Recorded here (under data_mutex) and actually sent by flush_deferred_sends once the lock is
++	// released, so the signaling thread never holds data_mutex across the p2p port locks the socket
++	// send takes. The packet bytes are snapshotted now, so reusing sig_packet next iteration is safe.
++	m_deferred_sends.push_back({std::move(packet), addr, port});
++}
+ 
+-	char ip_str[16];
+-	inet_ntop(AF_INET, &dest.sin_addr, ip_str, sizeof(ip_str));
++void signaling_handler::flush_deferred_sends(std::vector<deferred_send>& sends)
++{
++	for (auto& s : sends)
++	{
++		sockaddr_in dest;
++		memset(&dest, 0, sizeof(sockaddr_in));
++		dest.sin_family = AF_INET;
++		dest.sin_addr.s_addr = s.addr;
++		dest.sin_port = std::bit_cast<u16, be_t<u16>>(s.port);
+ 
+-	sign_log.trace("Sending %s packet to %s:%d", sp.command, ip_str, port);
++		char ip_str[16];
++		inet_ntop(AF_INET, &dest.sin_addr, ip_str, sizeof(ip_str));
+ 
+-	if (np::is_ipv6_supported() && np::ip_address_translator::is_ipv6(dest.sin_addr.s_addr))
+-	{
+-		auto& translator = g_fxo->get<np::ip_address_translator>();
+-		const auto addr6 = translator.get_ipv6_sockaddr(dest.sin_addr.s_addr, dest.sin_port);
++		if (np::is_ipv6_supported() && np::ip_address_translator::is_ipv6(dest.sin_addr.s_addr))
++		{
++			auto& translator = g_fxo->get<np::ip_address_translator>();
++			const auto addr6 = translator.get_ipv6_sockaddr(dest.sin_addr.s_addr, dest.sin_port);
+ 
+-		if (!send_packet_from_p2p_port_ipv6(packet, addr6))
+-			sign_log.error("Failed to send signaling packet to %s:%d", ip_str, port);
++			if (!send_packet_from_p2p_port_ipv6(s.packet, addr6))
++				sign_log.error("Failed to send signaling packet to %s:%d", ip_str, s.port);
++		}
++		else if (!send_packet_from_p2p_port_ipv4(s.packet, dest))
++		{
++			sign_log.error("Failed to send signaling packet to %s:%d", ip_str, s.port);
++		}
+ 	}
+-	else if (!send_packet_from_p2p_port_ipv4(packet, dest))
++
++	sends.clear();
++}
++
++signaling_handler::deferred_work signaling_handler::take_deferred()
++{
++	// Called while data_mutex is held. Moves out everything queued during this locked section,
++	// plus a snapshot of the context-id lists, so dispatch_deferred can run the callbacks (which
++	// resolve the contexts through idm and take the per-context lock) with data_mutex released.
++	deferred_work work;
++	work.cbs.swap(m_deferred_cbs);
++	work.sends.swap(m_deferred_sends);
++	work.sig_ctxs.assign(sig_ctx_lst.begin(), sig_ctx_lst.end());
++	work.match2_ctxs.assign(match2_ctx_lst.begin(), match2_ctx_lst.end());
++	return work;
++}
++
++void signaling_handler::dispatch_deferred(deferred_work& work)
++{
++	// Called after data_mutex is released. Fires the recorded callbacks against the snapshotted
++	// context lists, then sends the recorded packets - none of it under data_mutex.
++	for (const auto& cb : work.cbs)
+ 	{
+-		sign_log.error("Failed to send signaling packet to %s:%d", ip_str, port);
++		switch (cb.type)
++		{
++		case deferred_callback::kind::sig: signal_sig_callback(work.sig_ctxs, cb.conn_id, cb.event, cb.error_code); break;
++		case deferred_callback::kind::sig2: signal_sig2_callback(work.match2_ctxs, cb.room_id, cb.member_id, static_cast<SceNpMatching2Event>(cb.event), cb.error_code); break;
++		case deferred_callback::kind::ext: signal_ext_sig_callback(work.sig_ctxs, cb.conn_id, cb.event, cb.error_code); break;
++		}
+ 	}
++
++	flush_deferred_sends(work.sends);
+ }
+ 
+ void signaling_handler::queue_signaling_packet(signaling_packet& sp, std::shared_ptr<signaling_info> si, steady_clock::time_point wakeup_time)
+@@ -691,6 +757,8 @@ std::shared_ptr<signaling_info> signaling_handler::get_signaling_ptr(const signa
+ 
+ void signaling_handler::start_sig(u32 conn_id, u32 addr, u16 port)
+ {
++	deferred_work work;
++	{
+ 	std::lock_guard lock(data_mutex);
+ 	auto& sent_packet = sig_packet;
+ 	sent_packet.command = signal_connect;
+@@ -712,6 +780,9 @@ void signaling_handler::start_sig(u32 conn_id, u32 addr, u16 port)
+ 	send_signaling_packet(sent_packet, si->addr, si->port);
+ 	queue_signaling_packet(sent_packet, si, now + REPEAT_CONNECT_DELAY);
+ 	wake_up();
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
+ }
+ 
+ void signaling_handler::stop_sig_nl(u32 conn_id, bool forceful)
+@@ -744,12 +815,19 @@ void signaling_handler::stop_sig_nl(u32 conn_id, bool forceful)
+ 
+ void signaling_handler::stop_sig(u32 conn_id, bool forceful)
+ {
++	deferred_work work;
++	{
+ 	std::lock_guard lock(data_mutex);
+ 	stop_sig_nl(conn_id, forceful);
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
+ }
+ 
+ void signaling_handler::disconnect_sig2_users(u64 room_id)
+ {
++	deferred_work work;
++	{
+ 	std::lock_guard lock(data_mutex);
+ 
+ 	for (auto& [conn_id, si] : sig_peers)
+@@ -759,10 +837,15 @@ void signaling_handler::disconnect_sig2_users(u64 room_id)
+ 			stop_sig_nl(conn_id, false);
+ 		}
+ 	}
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
+ }
+ 
+ void signaling_handler::send_information_packets(u32 addr, u16 port, const SceNpId& npid)
+ {
++	deferred_work work;
++	{
+ 	std::lock_guard lock(data_mutex);
+ 
+ 	const u32 conn_id = get_always_conn_id(npid);
+@@ -778,6 +861,9 @@ void signaling_handler::send_information_packets(u32 addr, u16 port, const SceNp
+ 	send_signaling_packet(sent_packet, addr, port);
+ 	queue_signaling_packet(sent_packet, si, steady_clock::now() + REPEAT_INFO_DELAY);
+ 	wake_up();
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
+ }
+ 
+ u32 signaling_handler::get_always_conn_id(const SceNpId& npid)
+@@ -817,18 +903,24 @@ u32 signaling_handler::init_sig1(const SceNpId& npid)
+ 
+ u32 signaling_handler::init_sig2(const SceNpId& npid, u64 room_id, u16 member_id)
+ {
++	deferred_work work;
++	u32 conn_id;
++	{
+ 	std::lock_guard lock(data_mutex);
+-	u32 conn_id = get_always_conn_id(npid);
++	conn_id = get_always_conn_id(npid);
+ 	auto& si = ::at32(sig_peers, conn_id);
+ 	si->room_id = room_id;
+ 	si->member_id = member_id;
+ 
+ 	// If connection exists from prior state notify
+ 	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE)
+-		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Established, CELL_OK);
++		m_deferred_cbs.push_back({deferred_callback::kind::sig2, 0, si->room_id, si->member_id, static_cast<s32>(SCE_NP_MATCHING2_SIGNALING_EVENT_Established), CELL_OK});
+ 	else
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_PENDING;
+ 
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
+ 	return conn_id;
+ }
+ 
+@@ -866,3 +958,92 @@ std::optional<u32> signaling_handler::get_conn_id_from_addr(u32 addr, u16 port)
  
  	return std::nullopt;
  }
 +
 +void signaling_handler::force_disconnect_by_addr(u32 addr, u16 port)
 +{
++	deferred_work work;
++	{
 +	std::lock_guard lock(data_mutex);
++
++	// Prefer an exact addr+port match: two peers behind one public IP share an external
++	// address and differ only by port, so an addr-only match could disconnect the wrong
++	// peer. Fall back to the first addr-only match if no port matches, which preserves the
++	// original behaviour for the common single-peer case and never leaves a dead peer
++	// connected. si->port and the passed port share the same representation - both are
++	// bit_cast<u16, be_t<u16>>(sin_port) of the same peer UDP endpoint (signaling and P2PS
++	// ride the same port) - so a direct == is correct.
++	std::shared_ptr<signaling_info> target;
++	const char* match_kind = "";
++	bool port_matched      = false;
++
++	std::shared_ptr<signaling_info> addr_only_si;
++	const char* addr_only_kind = "";
 +
 +	for (auto& [conn_id, si] : sig_peers)
 +	{
@@ -359,26 +718,145 @@ index a4c59763c..9fd34ac45 100644
 +		const bool direct_match = (si->addr == addr);
 +		const bool mapped_match = (si->mapped_addr != 0 && si->mapped_addr == addr);
 +
-+		if (direct_match || mapped_match)
++		if (!direct_match && !mapped_match)
++			continue;
++
++		const char* kind      = direct_match ? "direct" : "mapped";
++		const bool port_match = (direct_match && si->port == port) || (mapped_match && si->mapped_port == port);
++
++		if (port_match)
 +		{
-+			sign_log.notice("[P2PS] P2PS timeout triggered signaling disconnect for conn_id %d (%s match)",
-+				conn_id, direct_match ? "direct" : "mapped");
-+			update_si_status(si, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
-+			return;
++			target       = si;
++			match_kind   = kind;
++			port_matched = true;
++			break;
++		}
++
++		if (!addr_only_si)
++		{
++			addr_only_si   = si;
++			addr_only_kind = kind;
 +		}
 +	}
 +
-+	sign_log.notice("[P2PS] P2PS timeout: no active signaling connection found");
++	if (!target && addr_only_si)
++	{
++		target     = addr_only_si;
++		match_kind = addr_only_kind;
++	}
++
++	if (target)
++	{
++		if (port_matched)
++			sign_log.warning("[P2PS] Peer timed out, dropping signaling connection: conn_id %d (%s addr+port match)", target->conn_id, match_kind);
++		else
++			sign_log.warning("[P2PS] Peer timed out, dropping signaling connection: conn_id %d (%s addr match, port differed)", target->conn_id, match_kind);
++
++		update_si_status(target, SCE_NP_SIGNALING_CONN_STATUS_INACTIVE, SCE_NP_SIGNALING_ERROR_TIMEOUT);
++	}
++	else
++	{
++		sign_log.warning("[P2PS] Peer timeout could not be matched to an active signaling connection");
++	}
++
++	work = take_deferred();
++	}
++	dispatch_deferred(work);
++}
++
++void signaling_handler::queue_force_disconnect(u32 addr, u16 port)
++{
++	// Called from the P2PS timeout monitor (a foreign thread). Record the dead endpoint and wake
++	// the signaling thread, which applies the disconnect in operator(). This thread must not take
++	// data_mutex - that lock belongs to the signaling thread alone.
++	{
++		std::lock_guard lock(m_pending_disc_mutex);
++		m_pending_disc.emplace_back(addr, port);
++	}
++	wake_up();
 +}
 diff --git a/rpcs3/Emu/NP/signaling_handler.h b/rpcs3/Emu/NP/signaling_handler.h
-index c97c049d3..732a8dacb 100644
+index c97c049d3..1ea20592b 100644
 --- a/rpcs3/Emu/NP/signaling_handler.h
 +++ b/rpcs3/Emu/NP/signaling_handler.h
-@@ -77,6 +77,7 @@ public:
- 	void start_sig(u32 conn_id, u32 addr, u16 port);
+@@ -78,6 +78,12 @@ public:
  	void stop_sig(u32 conn_id, bool forceful);
  	void send_information_packets(u32 addr, u16 port, const SceNpId& npid);
-+	void force_disconnect_by_addr(u32 addr, u16 port);
  
++	// Called by the P2PS timeout monitor (a foreign thread) when a peer's stream dies. It only
++	// enqueues the dead endpoint and wakes us; the disconnect itself is applied on this thread
++	// in operator() via force_disconnect_by_addr, so the monitor never touches data_mutex.
++	void queue_force_disconnect(u32 addr, u16 port);
++	void force_disconnect_by_addr(u32 addr, u16 port);
++
  	void disconnect_sig2_users(u64 room_id);
  
+ 	static constexpr auto thread_name = "Signaling Manager Thread"sv;
+@@ -118,9 +124,9 @@ private:
+ 	static void update_si_mapped_addr(std::shared_ptr<signaling_info>& si, u32 new_addr, u16 new_port);
+ 	void update_si_status(std::shared_ptr<signaling_info>& si, s32 new_status, s32 error_code);
+ 	void update_ext_si_status(std::shared_ptr<signaling_info>& si, bool op_activated);
+-	void signal_sig_callback(u32 conn_id, s32 event, s32 error_code);
+-	void signal_ext_sig_callback(u32 conn_id, s32 event, s32 error_code) const;
+-	void signal_sig2_callback(u64 room_id, u16 member_id, SceNpMatching2Event event, s32 error_code) const;
++	void signal_sig_callback(const std::vector<u32>& sig_ctxs, u32 conn_id, s32 event, s32 error_code) const;
++	void signal_ext_sig_callback(const std::vector<u32>& sig_ctxs, u32 conn_id, s32 event, s32 error_code) const;
++	void signal_sig2_callback(const std::vector<u16>& match2_ctxs, u64 room_id, u16 member_id, SceNpMatching2Event event, s32 error_code) const;
+ 
+ 	static bool validate_signaling_packet(const signaling_packet* sp);
+ 	void reschedule_packet(std::shared_ptr<signaling_info>& si, SignalingCommand cmd, steady_clock::time_point new_timepoint);
+@@ -131,6 +137,46 @@ private:
+ 	mutable shared_mutex data_mutex;
+ 	atomic_t<u32> wakey = 0;
+ 
++	// Dead endpoints queued by queue_force_disconnect() (P2PS monitor thread), drained on the
++	// signaling thread in operator(). Guarded by its own mutex, never by data_mutex, so the
++	// foreign thread that enqueues never touches signaling's data_mutex.
++	shared_mutex m_pending_disc_mutex;
++	std::vector<std::pair<u32, u16>> m_pending_disc;
++
++	// Guest signaling callbacks and outgoing signaling packets are recorded here while data_mutex
++	// is held and applied after it is released, so the signaling thread never holds data_mutex
++	// across a guest callback (which takes the per-context lock) or a packet send (which takes the
++	// p2p port locks). Holding data_mutex across either of those is the teardown deadlock this
++	// patch closes. These buffers are only ever touched by the thread that currently holds
++	// data_mutex: appended under the lock, then moved out by take_deferred() before it is dropped.
++	struct deferred_callback
++	{
++		enum class kind { sig, sig2, ext } type;
++		u32 conn_id = 0;
++		u64 room_id = 0;
++		u16 member_id = 0;
++		s32 event = 0;
++		s32 error_code = 0;
++	};
++	struct deferred_send
++	{
++		std::vector<u8> packet;
++		u32 addr = 0;
++		u16 port = 0;
++	};
++	struct deferred_work
++	{
++		std::vector<deferred_callback> cbs;
++		std::vector<deferred_send> sends;
++		std::vector<u32> sig_ctxs;
++		std::vector<u16> match2_ctxs;
++	};
++	std::vector<deferred_callback> m_deferred_cbs;
++	std::vector<deferred_send> m_deferred_sends;
++	deferred_work take_deferred();               // call while holding data_mutex
++	void dispatch_deferred(deferred_work& work); // call after releasing data_mutex
++	void flush_deferred_sends(std::vector<deferred_send>& sends);
++
+ 	signaling_packet sig_packet{};
+ 
+ 	std::multimap<steady_clock::time_point, queued_packet> qpackets; // (wakeup time, packet)
+@@ -141,6 +187,6 @@ private:
+ 
+ 	void process_incoming_messages();
+ 	std::shared_ptr<signaling_info> get_signaling_ptr(const signaling_packet* sp);
+-	void send_signaling_packet(signaling_packet& sp, u32 addr, u16 port) const;
++	void send_signaling_packet(signaling_packet& sp, u32 addr, u16 port);
+ 	void queue_signaling_packet(signaling_packet& sp, std::shared_ptr<signaling_info> si, steady_clock::time_point wakeup_time);
+ };

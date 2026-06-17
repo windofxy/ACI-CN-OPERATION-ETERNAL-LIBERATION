@@ -6,9 +6,9 @@ import subprocess
 import time
 
 
-def deploy_patches(rpcs3_dir: str, patches_dir: str):
+def deploy_patches(rpcs3_dir: str, cfg_dir: str, patches_dir: str):
     patches_dest = os.path.join(rpcs3_dir, "portable", "patches")
-    config_dest  = os.path.join(rpcs3_dir, "portable", "config")
+    config_dest  = cfg_dir
     os.makedirs(patches_dest, exist_ok=True)
     os.makedirs(config_dest,  exist_ok=True)
     shutil.copy2(
@@ -47,27 +47,29 @@ def install_gui_assets(rpcs3_dir: str, patches_dir: str):
 
 def ensure_custom_config(
     rpcs3_dir: str,
+    cfg_dir: str,
     rpcs3_exe: str,
     timeout: int = 30,
     progress_cb=None,
+    extra_args=None,
 ) -> bool:
     """Create the per-game custom config if it doesn't exist yet.
 
     Launches RPCS3 briefly to generate config.yml on first run.
     Returns True on success, False if config.yml never appeared.
     """
-    cfg_dir    = os.path.join(rpcs3_dir, "portable", "config", "custom_configs")
-    cfg_path   = os.path.join(cfg_dir, "config_NPUB31347.yml")
-    global_cfg = os.path.join(rpcs3_dir, "portable", "config", "config.yml")
-    os.makedirs(cfg_dir, exist_ok=True)
+    custom_dir = os.path.join(cfg_dir, "custom_configs")
+    cfg_path   = os.path.join(custom_dir, "config_NPUB31347.yml")
+    global_cfg = os.path.join(cfg_dir, "config.yml")
+    os.makedirs(custom_dir, exist_ok=True)
 
     if os.path.exists(cfg_path):
         return True
 
     if not os.path.exists(global_cfg):
         if progress_cb:
-            progress_cb("No RPCS3 config found — launching briefly to generate one...")
-        proc = subprocess.Popen([rpcs3_exe], cwd=rpcs3_dir)
+            progress_cb("No RPCS3 config found, launching briefly to generate one...")
+        proc = subprocess.Popen([rpcs3_exe] + list(extra_args or []), cwd=rpcs3_dir)
         for _ in range(timeout):
             if os.path.exists(global_cfg):
                 break

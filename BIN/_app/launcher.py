@@ -1,6 +1,7 @@
 """OP ETERNAL Launcher - OPERATION ETERNAL LIBERATION."""
 import glob
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -39,13 +40,27 @@ RPCN_DIR    = APP_DIR / "rpcn"
 GAMESERVER_DIR = APP_DIR / "gameserver"
 PATCHES_DIR = APP_DIR / "patches"
 PYTHON_EXE  = APP_DIR / "python" / "python.exe" if _IS_WIN else APP_DIR / "python" / "bin" / "python3"
-RPCS3_EXE   = RPCS3_DIR / f"rpcs3{_EXE}"
+
+
+def _resolve_rpcs3_exe() -> Path:
+    if _IS_WIN:
+        return RPCS3_DIR / "rpcs3.exe"
+    images = sorted(RPCS3_DIR.glob("*.AppImage"))
+    if images:
+        return images[0]
+    return RPCS3_DIR / "rpcs3"
+
+
+RPCS3_EXE   = _resolve_rpcs3_exe()
 RPCN_EXE    = RPCN_DIR / f"rpcn{_EXE}"
 GAMESERVER_SCRIPT = GAMESERVER_DIR / "opeternal_listener.py"
 GAMESERVER_LOG    = GAMESERVER_DIR / "gameserver.log"
 PORTABLE_DIR = RPCS3_DIR / "portable"
-RPCN_YML    = PORTABLE_DIR / "config" / "rpcn.yml"
-CUSTOM_CFG  = PORTABLE_DIR / "config" / "custom_configs" / "config_NPUB31347.yml"
+# RPCS3 keeps yml configs in a config/ subdirectory only on Windows; elsewhere
+# they sit directly in the portable dir (fs::get_config_dir).
+RPCS3_CFG_DIR = PORTABLE_DIR / "config" if _IS_WIN else PORTABLE_DIR
+RPCN_YML    = RPCS3_CFG_DIR / "rpcn.yml"
+CUSTOM_CFG  = RPCS3_CFG_DIR / "custom_configs" / "config_NPUB31347.yml"
 TSS_SRC_DIR = ROOT_DIR / "TSS"
 RPCS3_TSS   = PORTABLE_DIR / "tss"
 RPCN_TSS    = RPCN_DIR / "tss_data" / "NPWR04428_00"
@@ -62,6 +77,57 @@ TELEMETRY_URL        = "https://oel-telemetry.killerbyte.xyz"
 FIRMWARE_INDICATOR = PORTABLE_DIR / "dev_flash" / "sys" / "external" / "libsre.sprx"
 GAME_INDICATOR     = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "PARAM.SFO"
 GAME_USRDIR        = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "USRDIR"
+
+
+def rpcs3_launch_args() -> list:
+    """Extra RPCS3 argv. AppImages need FUSE; without it, fall back to
+    --appimage-extract-and-run (handled by the AppImage runtime itself)."""
+    if _IS_WIN or RPCS3_EXE.suffix != ".AppImage":
+        return []
+    if Path("/dev/fuse").exists() and (shutil.which("fusermount3") or shutil.which("fusermount")):
+        return []
+    return ["--appimage-extract-and-run"]
+
+
+def rpcs3_log_path() -> Path:
+    """RPCS3.log location. fs::get_log_dir is the config dir on Windows but the
+    cache dir on Linux, which ignores portable mode."""
+    if _IS_WIN:
+        return PORTABLE_DIR / "log" / "RPCS3.log"
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.environ.get("HOME", "."), ".cache")
+    return Path(cache) / "rpcs3" / "RPCS3.log"
+
+
+def gameserver_python() -> Path:
+    """Interpreter for the game server. On Linux this is a dedicated copy of
+    the bundled python so cap_net_bind_service (ports 80/443) is granted to it
+    alone, never to the GUI interpreter."""
+    if not _IS_WIN:
+        cand = APP_DIR / "python" / "bin" / "python3-gameserver"
+        if cand.exists():
+            return cand
+    return Path(PYTHON_EXE)
+
+
+def privileged_port_command() -> str:
+    """The shell command that lets the game server bind ports 80 and 443."""
+    py = gameserver_python()
+    if py.name == "python3-gameserver":
+        return f"sudo setcap cap_net_bind_service=+ep '{py}'"
+    return "sudo sysctl net.ipv4.ip_unprivileged_port_start=80"
+
+
+def privileged_port_help() -> str:
+    """Explanation for the Linux <1024 port restriction (ports 80/443)."""
+    msg = ("The game server must listen on ports 80 and 443, which Linux "
+           "reserves for privileged processes.\n\n"
+           "Run this once in a terminal, then launch again:\n\n"
+           f"{privileged_port_command()}")
+    if gameserver_python().name != "python3-gameserver":
+        msg += ("\n\nTo make it permanent:\n"
+                "echo net.ipv4.ip_unprivileged_port_start=80 | "
+                "sudo tee /etc/sysctl.d/99-opeternal.conf")
+    return msg
 
 # Modules live next to this file
 sys.path.insert(0, str(APP_DIR))
@@ -87,6 +153,7 @@ _DEFAULTS = {
     "telemetry_client_id": "",
     "auto_check_updates": RELEASE_CHANNEL == "experimental",
     "update_channel": RELEASE_CHANNEL,
+    "desktop_shortcut_offered": False,   # Linux only; installer covers Windows
 }
 
 def load_settings() -> dict:
@@ -124,6 +191,28 @@ def parse_remote_addr(s: str) -> tuple[str, int, int]:
     http_p  = _port(1, 80)
     https_p = _port(2, 443)
     return host, http_p, https_p
+
+
+# WireGuard relay tunnel subnet (see WORK/docs/networking/rpcn-ports-relay.md).
+RELAY_SUBNET = "10.99.99.0/24"
+
+
+def is_relay_addr(ip: str) -> bool:
+    """True if `ip` is an IPv4 inside RELAY_SUBNET (a WireGuard tunnel address)."""
+    if not ip:
+        return False
+    try:
+        return ipaddress.ip_address(ip) in ipaddress.ip_network(RELAY_SUBNET)
+    except ValueError:
+        return False
+
+
+def relay_bind_ip() -> str | None:
+    """First live LAN IP inside RELAY_SUBNET (the WireGuard tunnel IP), or None."""
+    for ip in ip_detect.list_lan_ips():
+        if is_relay_addr(ip):
+            return ip
+    return None
 
 # ---------------------------------------------------------------------------
 # Launch worker (runs preparation steps off the main thread)
@@ -163,12 +252,13 @@ class LaunchWorker(QThread):
             self.log.emit(f"TSS: {n}/15 files copied.")
 
             self.log.emit("Deploying patches...")
-            cfg_mod.deploy_patches(str(RPCS3_DIR), str(PATCHES_DIR))
+            cfg_mod.deploy_patches(str(RPCS3_DIR), str(RPCS3_CFG_DIR), str(PATCHES_DIR))
             cfg_mod.install_gui_assets(str(RPCS3_DIR), str(PATCHES_DIR))
 
             self.log.emit("Configuring RPCS3...")
             ok = cfg_mod.ensure_custom_config(
-                str(RPCS3_DIR), str(RPCS3_EXE),
+                str(RPCS3_DIR), str(RPCS3_CFG_DIR), str(RPCS3_EXE),
+                extra_args=rpcs3_launch_args(),
                 progress_cb=lambda m: self.log.emit(m),
             )
             if not ok:
@@ -262,6 +352,7 @@ class PlayTab(QWidget):
         self._checksum_worker: ChecksumWorker | None = None
         self._checksum_done = False
         self._game_hash = ""
+        self._relay_bind_checked = False
         self._build_ui()
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(2000)
@@ -605,6 +696,55 @@ class PlayTab(QWidget):
         """Return the chosen RPCS3 bind address, or '' for the RPCS3 default."""
         return self._rpcs3_bind_combo.currentData() or ""
 
+    def _select_bind_ip(self, ip: str):
+        """Select the bind-combo item for `ip` ('' == RPCS3 default) and persist it.
+
+        setCurrentIndex only fires the save signal when the index actually
+        changes, so signals are blocked and the setting is saved explicitly to
+        also cover the case where the combo already sits on that item.
+        """
+        idx = self._rpcs3_bind_combo.findData(ip)
+        if idx < 0:
+            idx = 0  # fall back to the Default item if the IP is not enumerated
+        self._rpcs3_bind_combo.blockSignals(True)
+        self._rpcs3_bind_combo.setCurrentIndex(idx)
+        self._rpcs3_bind_combo.blockSignals(False)
+        self._settings["rpcs3_bind_address"] = self._rpcs3_bind_combo.currentData() or ""
+        save_settings(self._settings)
+
+    def _check_relay_bind(self):
+        """One-shot WireGuard-relay bind guidance (rpcn-ports-relay.md).
+
+        Relay players must bind RPCS3 to their 10.99.99.x tunnel IP so the game
+        advertises a relay-reachable address; a relay bind left set after the
+        tunnel goes down points at a dead interface and breaks all multiplayer.
+        """
+        if self._relay_bind_checked:
+            return
+        self._relay_bind_checked = True
+
+        relay_ip = relay_bind_ip()
+        saved = self._settings.get("rpcs3_bind_address", "")
+
+        if relay_ip:
+            if saved == relay_ip:
+                return  # already bound to the relay tunnel IP
+            if QMessageBox.question(
+                    self, "WireGuard relay detected",
+                    f"This machine has a WireGuard relay address ({relay_ip}).\n\n"
+                    "Other relay players can reach you only when RPCS3 advertises "
+                    f"this tunnel address. Set the RPCS3 bind address to {relay_ip}?",
+            ) == QMessageBox.StandardButton.Yes:
+                self._select_bind_ip(relay_ip)
+        elif is_relay_addr(saved):
+            # Stale relay bind with WireGuard off: reset to the RPCS3 default.
+            self._select_bind_ip("")
+            QMessageBox.information(
+                self, "Relay bind cleared",
+                f"WireGuard is not active, so the saved relay bind address ({saved}) "
+                "was reset to the RPCS3 default.",
+            )
+
     def _on_upnp_changed(self, checked: bool):
         self._settings["rpcs3_upnp"] = checked
         save_settings(self._settings)
@@ -702,6 +842,18 @@ class SaveEditorTab(QWidget):
         pen_row.addWidget(self._penalty_label, 1)
         pen_row.addWidget(self._reset_penalty_btn)
         root.addLayout(pen_row)
+
+        # Co-Op Matching Rate quick action (always visible), with a button to
+        # raise a low rate back to the floor.
+        coop_row = QHBoxLayout()
+        self._coop_label = QLabel("Co-Op Matching Rate: --")
+        self._bump_coop_btn = QPushButton(
+            f"Restore to {save_editor.COOP_MATCH_RATE_FLOOR}")
+        self._bump_coop_btn.setEnabled(False)
+        self._bump_coop_btn.clicked.connect(self._bump_coop_rate)
+        coop_row.addWidget(self._coop_label, 1)
+        coop_row.addWidget(self._bump_coop_btn)
+        root.addLayout(coop_row)
 
         self._toggle_btn = QToolButton()
         self._toggle_btn.setText("Save editor")
@@ -882,6 +1034,7 @@ class SaveEditorTab(QWidget):
         self._write_btn.setEnabled(any_loaded)
         self._reset_penalty_btn.setEnabled(self._slot4 is not None)
         self._refresh_penalty_label()
+        self._refresh_coop_label()
         return errors
 
     def _refresh_penalty_label(self):
@@ -890,6 +1043,16 @@ class SaveEditorTab(QWidget):
         else:
             val = self._slot4.read_all().get("penalty-rank", 0)
             self._penalty_label.setText(f"Penalty Rank: {val}")
+
+    def _refresh_coop_label(self):
+        if self._slot3 is None:
+            self._coop_label.setText("Co-Op Matching Rate: --")
+            self._bump_coop_btn.setEnabled(False)
+            return
+        val = self._slot3.read_coop_match_rate()
+        self._coop_label.setText(f"Co-Op Matching Rate: {val}")
+        # Only enabled below the floor; writing the floor to a higher rate would lower it.
+        self._bump_coop_btn.setEnabled(val < save_editor.COOP_MATCH_RATE_FLOOR)
 
     def _stage_restore(self, slot_obj: save_editor.SaveSlot):
         slot20d = Path(slot_obj._path).stem.split("_")[-1]
@@ -986,6 +1149,56 @@ class SaveEditorTab(QWidget):
             return False, "No save folder."
         self._load_slots()
         return self._apply_penalty_reset()
+
+    def _bump_coop_rate(self):
+        if self._slot3 is None:
+            QMessageBox.warning(self, "Not loaded", "Slot 3 has not been read yet.")
+            return
+        ok, msg = self._apply_coop_bump()
+        if not ok:
+            QMessageBox.critical(self, "Restore failed", msg)
+            return
+        floor = save_editor.COOP_MATCH_RATE_FLOOR
+        QMessageBox.information(
+            self, "Co-Op Matching Rate restored",
+            f"Co-Op Matching Rate set to {floor} and restore staged.\n\n"
+            "Boot OP ETERNAL once to apply the change."
+        )
+
+    def _apply_coop_bump(self) -> tuple[bool, str]:
+        if self._slot3 is None:
+            return False, "Slot 3 has not been read yet."
+        try:
+            self._slot3.write_coop_match_rate(save_editor.COOP_MATCH_RATE_FLOOR)
+            self._slot3.save()
+            self._stage_restore(self._slot3)
+        except Exception as e:
+            return False, str(e)
+        self._refresh_coop_label()
+        self.restore_staged.emit()
+        return True, ""
+
+    def peek_latest_coop_rate(self) -> tuple[int | None, str | None]:
+        """Return (coop_match_rate, backup_path) for the newest slot 3 backup, else (None, None)."""
+        if not self._save_dir:
+            return None, None
+        backups_dir = os.path.join(self._save_dir, "backups")
+        candidates = sorted(glob.glob(os.path.join(backups_dir, "*_00000000000000000003.tdt")))
+        if not candidates:
+            return None, None
+        latest = candidates[-1]
+        try:
+            slot = save_editor.SaveSlot(3, latest)
+            return slot.read_coop_match_rate(), latest
+        except Exception:
+            return None, None
+
+    def bump_coop_from_latest(self) -> tuple[bool, str]:
+        """Reload slots from the latest backups, raise the Co-Op rate to the floor, refresh the UI."""
+        if not self._save_dir:
+            return False, "No save folder."
+        self._load_slots()
+        return self._apply_coop_bump()
 
 # ---------------------------------------------------------------------------
 # Backup / Restore sub-tab
@@ -1403,6 +1616,7 @@ class ACILauncher(QMainWindow):
         self._restore_staged = False
         self._save_load_offer_shown = False
         self._last_penalty_check_path: str | None = None
+        self._last_coop_check_path: str | None = None
         self._telemetry: TelemetryStreamer | None = None
 
         for proc, name in ((self._gameserver, "gameserver"),
@@ -1423,11 +1637,48 @@ class ACILauncher(QMainWindow):
         self._log_watcher.save_load_error_seen.connect(self._on_save_load_error)
         self._log_watcher.start()
 
-        # Let the window paint before the first penalty check.
-        QTimer.singleShot(800, self._check_penalty_rank)
+        # One-shot WireGuard relay bind check, once the window is shown.
+        QTimer.singleShot(0, self._play_tab._check_relay_bind)
+
+        # Let the window paint before the first save-state checks.
+        QTimer.singleShot(800, self._check_save_alerts)
 
         if self._settings.get("auto_check_updates"):
             QTimer.singleShot(1500, self._check_for_updates_startup)
+
+        if not _IS_WIN and not self._settings.get("desktop_shortcut_offered"):
+            QTimer.singleShot(1200, self._offer_desktop_shortcut)
+
+    def _offer_desktop_shortcut(self):
+        """One-time Linux equivalent of the installer's desktop shortcut."""
+        self._settings["desktop_shortcut_offered"] = True
+        save_settings(self._settings)
+        play = ROOT_DIR / "Play OPERATION ETERNAL LIBERATION (Linux).sh"
+        if not play.exists():
+            return
+        if QMessageBox.question(
+                self, "Application menu entry",
+                "Add OPERATION ETERNAL LIBERATION to your application menu?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        apps_dir = Path(os.environ.get("XDG_DATA_HOME")
+                        or os.path.join(os.environ.get("HOME", "."), ".local", "share")) / "applications"
+        try:
+            apps_dir.mkdir(parents=True, exist_ok=True)
+            (apps_dir / "operation-eternal-liberation.desktop").write_text(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=OPERATION ETERNAL LIBERATION\n"
+                "Comment=Community multiplayer launcher\n"
+                f'Exec="{play}"\n'
+                f'Path={ROOT_DIR}\n'
+                "Terminal=false\n"
+                "Categories=Game;\n",
+                encoding="utf-8",
+            )
+        except OSError as e:
+            QMessageBox.warning(self, "Application menu entry",
+                                f"Could not create the menu entry: {e}")
 
     def _build_ui(self):
         central = QWidget()
@@ -1526,6 +1777,45 @@ class ACILauncher(QMainWindow):
         self._play_tab.set_launch_enabled(True)
         QMessageBox.critical(self, "Launch failed", msg)
 
+    def _grant_port_privilege(self, gs_python: Path, bind_ip: str) -> bool:
+        """Get the game server its ports 80/443 capability. Offers to grant it
+        through the desktop password prompt (pkexec); falls back to a
+        copy-pasteable command. Returns True once the capability is in place."""
+        elevate = processes.can_elevate() and gs_python.name == "python3-gameserver"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Game server ports")
+        box.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        grant_btn = None
+        if elevate:
+            box.setText("The game server needs permission to use ports 80 and 443.\n\n"
+                        "Grant it now and your system will ask for your password.")
+            grant_btn = box.addButton("Grant permission", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            box.setText(privileged_port_help())
+        copy_btn = box.addButton("Copy command", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(grant_btn or copy_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is grant_btn:
+            outcome = processes.grant_port_capability(str(gs_python))
+            if (outcome == "granted"
+                    and not processes.needs_port_privilege(str(gs_python), bind_ip)):
+                return True
+            if outcome != "cancelled":
+                QMessageBox.warning(
+                    self, "Game server ports",
+                    "Granting the permission did not complete. Run this in a "
+                    "terminal, then launch again:\n\n" + privileged_port_command())
+        elif clicked is copy_btn:
+            QApplication.clipboard().setText(privileged_port_command())
+        return False
+
     def _on_worker_done(self, swap_ip: str):
         self.setWindowTitle(f"OPERATION ETERNAL LIBERATION {VERSION}")
         rpcn_mode = self._settings.get("rpcn_mode", "official")
@@ -1556,8 +1846,14 @@ class ACILauncher(QMainWindow):
             ]
 
         if not processes.is_port_open(swap_ip):
+            gs_python = gameserver_python()
+            if (not _IS_WIN
+                    and processes.needs_port_privilege(str(gs_python), swap_ip)
+                    and not self._grant_port_privilege(gs_python, swap_ip)):
+                self._play_tab.set_launch_enabled(True)
+                return
             ok = self._gameserver.launch(
-                str(PYTHON_EXE),
+                str(gs_python),
                 gs_args,
                 cwd=str(GAMESERVER_DIR),
                 new_console=True,
@@ -1574,13 +1870,13 @@ class ACILauncher(QMainWindow):
             if not self._restore_staged:
                 tus_saves.cleanup_restore_sentinels(str(PORTABLE_DIR / "tus"))
             self._restore_staged = False
-            self._rpcs3_proc.launch(str(RPCS3_EXE), [], cwd=str(RPCS3_DIR))
+            self._rpcs3_proc.launch(str(RPCS3_EXE), rpcs3_launch_args(), cwd=str(RPCS3_DIR))
 
         if (gs_mode == "operations"
                 and self._settings.get("enable_telemetry")
                 and self._telemetry is None):
             self._telemetry = TelemetryStreamer(
-                log_path=PORTABLE_DIR / "log" / "RPCS3.log",
+                log_path=rpcs3_log_path(),
                 url=TELEMETRY_URL,
                 metadata={
                     "version":     VERSION,
@@ -1605,9 +1901,14 @@ class ACILauncher(QMainWindow):
         self._play_tab.refresh_setup_status()
         tus_saves.cleanup_restore_sentinels(str(PORTABLE_DIR / "tus"))
         self._restore_staged = False
-        # Pick up any backups written this session before the penalty check.
+        # Pick up any backups written this session before the save-state checks.
         self._saves_tab.editor_tab._try_auto_read()
+        self._check_save_alerts()
+
+    def _check_save_alerts(self):
+        # Modal dialogs, so run sequentially: penalty first, then Co-Op rate.
         self._check_penalty_rank()
+        self._check_coop_rate()
 
     def _check_penalty_rank(self):
         editor = self._saves_tab.editor_tab
@@ -1646,6 +1947,48 @@ class ACILauncher(QMainWindow):
         QMessageBox.information(
             self, "Done",
             "Penalty Rank reset to 0 and restore staged.\n"
+            "Boot OP ETERNAL once to apply the change."
+        )
+
+    def _check_coop_rate(self):
+        editor = self._saves_tab.editor_tab
+        rate, path = editor.peek_latest_coop_rate()
+        if rate is None or path is None:
+            return
+        floor = save_editor.COOP_MATCH_RATE_FLOOR
+        if rate >= floor:
+            self._last_coop_check_path = path
+            return
+        if path == self._last_coop_check_path:
+            return
+        self._last_coop_check_path = path
+        reply = QMessageBox.question(
+            self, "Co-Op Matching Rate low",
+            f"Your latest save shows a Co-Op Matching Rate of {rate}, below the "
+            f"{floor} needed to unlock the HARD co-op missions at First Lieutenant.\n\n"
+            f"Would you like to restore it to {floor}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        confirm = QMessageBox.warning(
+            self, "Confirm Co-Op Matching Rate change",
+            f"This will write Co-Op Matching Rate = {floor} to your local save and "
+            "stage it for the game to apply on next boot. The change syncs to RPCN "
+            "the next time the game saves.\n\n"
+            "Proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = editor.bump_coop_from_latest()
+        if not ok:
+            QMessageBox.warning(self, "Restore failed", msg)
+            return
+        self._restore_staged = True
+        QMessageBox.information(
+            self, "Done",
+            f"Co-Op Matching Rate set to {floor} and restore staged.\n"
             "Boot OP ETERNAL once to apply the change."
         )
 

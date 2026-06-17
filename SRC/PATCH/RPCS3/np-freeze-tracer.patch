@@ -1,0 +1,281 @@
+diff --git a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
+index 13e4b0dd8..fe4cdf85c 100644
+--- a/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
++++ b/rpcs3/Emu/Cell/Modules/cellSysutil.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include "Utilities/StrUtil.h"
+ #include "Utilities/lockless.h"
++#include "Emu/NP/freeze_tracer.h"
+ 
+ #include <span>
+ #include <deque>
+@@ -577,6 +578,7 @@ error_code cellSysutilGetSystemParamString(CellSysutilParamId id, vm::ptr<char>
+ error_code cellSysutilCheckCallback(ppu_thread& ppu)
+ {
+ 	cellSysutil.trace("cellSysutilCheckCallback()");
++	freeze_tracer::beat_pump();
+ 
+ 	auto& cbm = g_fxo->get<sysutil_cb_manager>();
+ 
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp.cpp b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+index 417d624d2..50221c0c0 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp.cpp
+@@ -23,6 +23,7 @@
+ #include "Emu/NP/np_helpers.h"
+ #include "Emu/NP/np_structs_extra.h"
+ #include "Emu/NP/signaling_handler.h"
++#include "Emu/NP/freeze_tracer.h"
+ #include "Emu/system_config.h"
+ 
+ #include "Emu/RSX/Overlays/overlay_manager.h"
+@@ -6889,6 +6890,7 @@ error_code sceNpSignalingGetConnectionStatus(u32 ctx_id, u32 conn_id, vm::ptr<s3
+ error_code sceNpSignalingGetConnectionInfo(u32 ctx_id, u32 conn_id, s32 code, vm::ptr<SceNpSignalingConnectionInfo> info)
+ {
+ 	sceNp.warning("sceNpSignalingGetConnectionInfo(ctx_id=%d, conn_id=%d, code=%d, info=*0x%x)", ctx_id, conn_id, code, info);
++	freeze_tracer::getter_sig();
+ 
+ 	auto& nph = g_fxo->get<named_thread<np::np_handler>>();
+ 
+diff --git a/rpcs3/Emu/Cell/Modules/sceNp2.cpp b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+index 05bb06d35..627aa2894 100644
+--- a/rpcs3/Emu/Cell/Modules/sceNp2.cpp
++++ b/rpcs3/Emu/Cell/Modules/sceNp2.cpp
+@@ -9,6 +9,7 @@
+ #include "Emu/NP/np_contexts.h"
+ #include "Emu/NP/np_helpers.h"
+ #include "Emu/NP/signaling_handler.h"
++#include "Emu/NP/freeze_tracer.h"
+ #include "cellSysutil.h"
+ 
+ LOG_CHANNEL(sceNp2);
+@@ -684,6 +685,7 @@ error_code sceNpMatching2SignalingGetConnectionInfo(
+     SceNpMatching2ContextId ctxId, SceNpMatching2RoomId roomId, SceNpMatching2RoomMemberId memberId, s32 code, vm::ptr<SceNpSignalingConnectionInfo> connInfo)
+ {
+ 	sceNp2.warning("sceNpMatching2SignalingGetConnectionInfo(ctxId=%d, roomId=%d, memberId=%d, code=%d, connInfo=*0x%x)", ctxId, roomId, memberId, code, connInfo);
++	freeze_tracer::getter_sig2();
+ 
+ 	auto& nph = g_fxo->get<named_thread<np::np_handler>>();
+ 
+@@ -1037,6 +1039,7 @@ error_code sceNpMatching2GetRoomMemberDataInternalLocal(SceNpMatching2ContextId
+ {
+ 	sceNp2.warning("sceNpMatching2GetRoomMemberDataInternalLocal(ctxId=%d, roomId=%d, memberId=%d, attrId=*0x%x, attrIdNum=%d, member=*0x%x, buf=*0x%x, bufLen=%d)", ctxId, roomId, memberId, attrId,
+ 		attrIdNum, member, buf, bufLen);
++	freeze_tracer::getter_member();
+ 
+ 	auto& nph = g_fxo->get<named_thread<np::np_handler>>();
+ 
+diff --git a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+index b8658667e..9e175c304 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_net/lv2_socket_p2ps.cpp
+@@ -5,6 +5,7 @@
+ #include "lv2_socket_p2ps.h"
+ #include "Emu/NP/np_helpers.h"
+ #include "Emu/NP/signaling_handler.h"
++#include "Emu/NP/freeze_tracer.h"
+ #include "nt_p2p_port.h"
+ #include "network_context.h"
+ #include "sys_net_helpers.h"
+@@ -94,6 +95,18 @@ public:
+ 	{
+ 		atomic_wait_timeout timeout = atomic_wait_timeout::inf;
+ 
++		// [freeze-tracer] stale-watcher locals: persist across iterations, never shared.
++		std::uint64_t ft_last_sig_hb  = 0;
++		std::uint64_t ft_last_pump_hb = 0;
++		auto ft_sig_advance  = std::chrono::steady_clock::now();
++		auto ft_pump_advance = std::chrono::steady_clock::now();
++		bool ft_sig_stale  = false;
++		bool ft_pump_stale = false;
++		auto ft_getter_flush = std::chrono::steady_clock::now();
++		std::uint64_t ft_last_sig2   = 0;
++		std::uint64_t ft_last_sig    = 0;
++		std::uint64_t ft_last_member = 0;
++
+ 		while (thread_ctrl::state() != thread_state::aborting)
+ 		{
+ 			if (!wakey)
+@@ -106,6 +119,82 @@ public:
+ 			if (thread_ctrl::state() == thread_state::aborting)
+ 				return;
+ 
++			// [freeze-tracer] stale-watcher: sample heartbeats and getter counters.
++			// All reads are relaxed; no lock is taken here.
++			{
++				const auto ft_now = std::chrono::steady_clock::now();
++
++				// Signaling-thread heartbeat
++				const std::uint64_t ft_sig_hb = freeze_tracer::g_sig_heartbeat.load(std::memory_order_relaxed);
++				if (ft_sig_hb != ft_last_sig_hb)
++				{
++					ft_last_sig_hb  = ft_sig_hb;
++					ft_sig_advance  = ft_now;
++					if (ft_sig_stale)
++					{
++						ft_sig_stale = false;
++						sys_net.warning("[freeze-tracer] signaling progress resumed");
++					}
++				}
++				else
++				{
++					const auto ft_ms = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::milliseconds>(ft_now - ft_sig_advance).count());
++					if (ft_ms >= 3000 && !ft_sig_stale)
++					{
++						ft_sig_stale = true;
++						sys_net.warning("[freeze-tracer] signaling no progress for %u ms", ft_ms);
++						sys_net.warning("[freeze-tracer] callbacks enqueued dead=%llu estab=%llu delivered dead=%llu estab=%llu",
++							freeze_tracer::g_dead_enqueued.load(std::memory_order_relaxed),
++							freeze_tracer::g_estab_enqueued.load(std::memory_order_relaxed),
++							freeze_tracer::g_dead_delivered.load(std::memory_order_relaxed),
++							freeze_tracer::g_estab_delivered.load(std::memory_order_relaxed));
++					}
++				}
++
++				// Callback-pump heartbeat
++				const std::uint64_t ft_pump_hb = freeze_tracer::g_pump_heartbeat.load(std::memory_order_relaxed);
++				if (ft_pump_hb != ft_last_pump_hb)
++				{
++					ft_last_pump_hb  = ft_pump_hb;
++					ft_pump_advance  = ft_now;
++					if (ft_pump_stale)
++					{
++						ft_pump_stale = false;
++						sys_net.warning("[freeze-tracer] callback pump progress resumed");
++					}
++				}
++				else
++				{
++					const auto ft_pump_ms = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::milliseconds>(ft_now - ft_pump_advance).count());
++					if (ft_pump_ms >= 3000 && !ft_pump_stale)
++					{
++						ft_pump_stale = true;
++						sys_net.warning("[freeze-tracer] callback pump no progress for %u ms", ft_pump_ms);
++					}
++				}
++
++				// Getter rate: once per ~1000 ms
++				const auto ft_getter_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(ft_now - ft_getter_flush).count();
++				if (ft_getter_elapsed >= 1000)
++				{
++					const std::uint64_t ft_sig2   = freeze_tracer::g_getter_sig2.load(std::memory_order_relaxed);
++					const std::uint64_t ft_sig    = freeze_tracer::g_getter_sig.load(std::memory_order_relaxed);
++					const std::uint64_t ft_member = freeze_tracer::g_getter_member.load(std::memory_order_relaxed);
++					const std::uint64_t d_sig2   = ft_sig2   - ft_last_sig2;
++					const std::uint64_t d_sig    = ft_sig    - ft_last_sig;
++					const std::uint64_t d_member = ft_member - ft_last_member;
++					if (d_sig2 || d_sig || d_member)
++					{
++						sys_net.notice("[freeze-tracer] getter rate sig2=%llu sig=%llu member=%llu /s",
++							d_sig2, d_sig, d_member);
++					}
++					ft_last_sig2   = ft_sig2;
++					ft_last_sig    = ft_sig;
++					ft_last_member = ft_member;
++					ft_getter_flush = ft_now;
++				}
++			}
++
+ 			// Teardown is collected here and run after data_mutex is released:
+ 			// force_disconnect_by_addr and close_stream take the signaling/socket mutexes
+ 			// that handle_connected holds before data_mutex, so tearing down under the lock
+diff --git a/rpcs3/Emu/NP/freeze_tracer.h b/rpcs3/Emu/NP/freeze_tracer.h
+new file mode 100644
+index 000000000..92b56031f
+--- /dev/null
++++ b/rpcs3/Emu/NP/freeze_tracer.h
+@@ -0,0 +1,44 @@
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++// Freeze-tracer diagnostics. Pure-observation counters shared across the NP, sysutil and P2PS
++// translation units. Every probe is a single relaxed atomic bump; the P2PS tcp_timeout_monitor
++// reads these counters and emits edge-triggered / rate-limited log lines. No probe takes a lock,
++// allocates, or sits on a data-steered branch, so removing any probe is behaviour neutral.
++namespace freeze_tracer
++{
++	// Heartbeats: monotonic ticks. A counter advances only while its owner thread makes progress;
++	// the monitor owns the clock and checks "did this advance since I last looked N ms ago".
++	inline std::atomic<std::uint64_t> g_sig_heartbeat{0};   // signaling handler loop
++	inline std::atomic<std::uint64_t> g_pump_heartbeat{0};  // cellSysutilCheckCallback
++
++	// Disconnect-event markers: enqueued under the signaling data_mutex, delivered after release.
++	// enqueued > delivered while signaling is stale means the callback pump is wedged.
++	inline std::atomic<std::uint64_t> g_dead_enqueued{0};
++	inline std::atomic<std::uint64_t> g_dead_delivered{0};
++	inline std::atomic<std::uint64_t> g_estab_enqueued{0};
++	inline std::atomic<std::uint64_t> g_estab_delivered{0};
++
++	// Getter call counts. The monitor flushes a per-second rate; the getters only increment.
++	inline std::atomic<std::uint64_t> g_getter_sig2{0};
++	inline std::atomic<std::uint64_t> g_getter_sig{0};
++	inline std::atomic<std::uint64_t> g_getter_member{0};
++
++	inline void beat_sig() { g_sig_heartbeat.fetch_add(1, std::memory_order_relaxed); }
++	inline void beat_pump() { g_pump_heartbeat.fetch_add(1, std::memory_order_relaxed); }
++
++	inline void mark_enqueue(bool is_dead)
++	{
++		(is_dead ? g_dead_enqueued : g_estab_enqueued).fetch_add(1, std::memory_order_relaxed);
++	}
++	inline void mark_deliver(bool is_dead)
++	{
++		(is_dead ? g_dead_delivered : g_estab_delivered).fetch_add(1, std::memory_order_relaxed);
++	}
++
++	inline void getter_sig2() { g_getter_sig2.fetch_add(1, std::memory_order_relaxed); }
++	inline void getter_sig() { g_getter_sig.fetch_add(1, std::memory_order_relaxed); }
++	inline void getter_member() { g_getter_member.fetch_add(1, std::memory_order_relaxed); }
++}
+diff --git a/rpcs3/Emu/NP/signaling_handler.cpp b/rpcs3/Emu/NP/signaling_handler.cpp
+index e9dc2f532..962450f32 100644
+--- a/rpcs3/Emu/NP/signaling_handler.cpp
++++ b/rpcs3/Emu/NP/signaling_handler.cpp
+@@ -7,6 +7,7 @@
+ #include "np_handler.h"
+ #include "Emu/NP/vport0.h"
+ #include "Emu/NP/np_helpers.h"
++#include "Emu/NP/freeze_tracer.h"
+ 
+ #ifdef _WIN32
+ #include <winsock2.h>
+@@ -402,6 +403,7 @@ void signaling_handler::operator()()
+ 		}
+ 
+ 		wakey = 0;
++		freeze_tracer::beat_sig();
+ 
+ 		if (thread_ctrl::state() == thread_state::aborting)
+ 			return;
+@@ -602,6 +604,7 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_ACTIVE;
+ 
+ 		m_deferred_cbs.push_back({deferred_callback::kind::sig, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_ESTABLISHED, error_code});
++		freeze_tracer::mark_enqueue(false);
+ 		m_deferred_cbs.push_back({deferred_callback::kind::sig2, 0, si->room_id, si->member_id, static_cast<s32>(SCE_NP_MATCHING2_SIGNALING_EVENT_Established), error_code});
+ 
+ 		if (si->op_activated)
+@@ -619,6 +622,7 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
+ 			sign_log.warning("Signaling connection lost: player '%s' conn_id %d, member(%d) of room(%d), error 0x%x", np::npid_to_string(si->npid), si->conn_id, si->member_id, si->room_id, error_code);
+ 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
+ 		m_deferred_cbs.push_back({deferred_callback::kind::sig, si->conn_id, 0, 0, SCE_NP_SIGNALING_EVENT_DEAD, error_code});
++		freeze_tracer::mark_enqueue(true);
+ 		m_deferred_cbs.push_back({deferred_callback::kind::sig2, 0, si->room_id, si->member_id, static_cast<s32>(SCE_NP_MATCHING2_SIGNALING_EVENT_Dead), error_code});
+ 		retire_all_packets(si);
+ 	}
+@@ -716,6 +720,12 @@ void signaling_handler::dispatch_deferred(deferred_work& work)
+ 	// context lists, then sends the recorded packets - none of it under data_mutex.
+ 	for (const auto& cb : work.cbs)
+ 	{
++		if (cb.type == deferred_callback::kind::sig && (cb.event == SCE_NP_SIGNALING_EVENT_DEAD || cb.event == SCE_NP_SIGNALING_EVENT_ESTABLISHED))
++		{
++			const bool is_dead = (cb.event == SCE_NP_SIGNALING_EVENT_DEAD);
++			freeze_tracer::mark_deliver(is_dead);
++			sign_log.notice("[freeze-tracer] delivered %s conn=%d", is_dead ? "dead" : "estab", cb.conn_id);
++		}
+ 		switch (cb.type)
+ 		{
+ 		case deferred_callback::kind::sig: signal_sig_callback(work.sig_ctxs, cb.conn_id, cb.event, cb.error_code); break;
