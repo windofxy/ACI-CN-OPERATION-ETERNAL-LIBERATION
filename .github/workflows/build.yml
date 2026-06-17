@@ -248,11 +248,10 @@ jobs:
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tree-transparency.patch" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-signaling-conninfo-disconnect.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-disconnect-handling.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-diagnostics.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-deadlock-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/framelimit-lock.patch" )
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-freeze-tracer.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/lv2-cond-tracer.patch" \
+              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-disconnect-fix.patch" )
           git clone "$RPCN_URL" SRC/GIT/rpcn
           ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
               && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
