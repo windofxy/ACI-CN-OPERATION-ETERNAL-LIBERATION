@@ -28,9 +28,9 @@ You provide:
 2. The game at version 2.11. In RPCS3, *File > Install Packages/Raps*; install your game files.
 3. The 15 TSS files. Drop them into the `TSS` folder.
 
-Always launch the game from the launcher, not directly from RPCS3, so the network config matches your current LAN IP.
+Always launch the game from the launcher, not directly from RPCS3. The launcher applies the right game patches and emulator settings before starting RPCS3, and keeps the network config in sync with your current LAN IP in order to make sure that game network packet routing is correct.
 
-The **Saves** tab includes a save editor, a backup browser, and a "new game" override. RPCS3 writes a local copy of every cloud save, so you can roll back or restart even after the cloud copy has been overwritten.
+The **Saves** tab includes a save editor, a save backup browser, and a "new game" override. RPCS3 writes a local copy of every cloud save, so you can roll back or restart even after the cloud copy has been overwritten.
 
 ### Updating
 
@@ -52,7 +52,7 @@ On Windows, run a newer installer over the existing install. On Linux, extract a
 You need:
 
 - A Linux box with Docker installed.
-- The full project source, cloned with `git clone --recurse-submodules`.
+- The full project source, cloned with `git clone`.
 
 ### Build the images
 
@@ -125,7 +125,7 @@ The bind-mounted `_app/rpcn/` data is preserved across updates.
 Clone with [Git](https://git-scm.com/downloads):
 
 ```
-git clone --recurse-submodules <repo-url>
+git clone <repo-url>
 ```
 
 ### Windows
