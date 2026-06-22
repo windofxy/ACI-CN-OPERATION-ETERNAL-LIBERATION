@@ -206,13 +206,13 @@ What it changes:
 - The room cache drops a departed member correctly, so a left player no longer
   lingers as an empty occupied slot.
 
-The lobby-wide freeze this closes was a lock-order deadlock: the signaling
-handler used to run its guest callbacks and send its packets while holding its
-state lock, so a peer teardown could hold that lock across a callback or a socket
-send and cross with a concurrent socket operation taking the same locks the other
-way. The handler now records those callbacks and packets while the lock is held
-and runs them after releasing it, and the timeout monitor hands the disconnect to
-the signaling thread rather than reaching into that lock itself, so neither side
+An earlier attempt at this disconnect handling introduced a lock-order deadlock:
+callbacks and packets were dispatched while the signaling handler held its state
+lock, so a peer teardown could cross with a concurrent socket operation taking
+the same locks the other way. This patch handles the disconnect in a thread-safe
+manner: the handler records callbacks and packets while the lock is held and runs
+them after releasing it, and the timeout monitor hands the disconnect to the
+signaling thread rather than reaching into that lock itself, so neither side
 holds one domain's lock while taking the other's.
 
 ## RPCS3: `np-freeze-tracer.patch`
