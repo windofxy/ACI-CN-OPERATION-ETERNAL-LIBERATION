@@ -2,6 +2,12 @@
 
 A community kit for playing OPERATION ETERNAL LIBERATION online via [RPCS3](https://rpcs3.net) and a community [RPCN](https://github.com/RipleyTom/rpcn) server.
 
+## Communities
+
+![OPERATION ETERNAL LIBERATION Discord](https://discord.com/api/guilds/1508671948299698248/widget.png?style=banner2)
+
+![Ace Combat Infinity Revival Project Discord](https://discord.com/api/guilds/1500375208144408628/widget.png?style=banner2)
+
 ## Playing
 
 ### Windows
