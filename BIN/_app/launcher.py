@@ -809,8 +809,17 @@ class SaveEditorTab(QWidget):
         self._slot2: save_editor.SaveSlot | None = None
         self._slot3: save_editor.SaveSlot | None = None
         self._slot4: save_editor.SaveSlot | None = None
+        # Snapshot of spin values as last read from / written to disk. Anything
+        # differing from this is an unwritten edit (see has_pending_changes).
+        self._baseline: dict[str, int] = {}
+        # Optional callable returning True while the game/RPCS3 is running, so
+        # writes can warn the user to close it first. Set by the launcher.
+        self._game_running_check = None
         self._build_ui()
         self._try_auto_read()
+
+    def set_game_running_check(self, fn):
+        self._game_running_check = fn
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -1035,7 +1044,19 @@ class SaveEditorTab(QWidget):
         self._reset_penalty_btn.setEnabled(self._slot4 is not None)
         self._refresh_penalty_label()
         self._refresh_coop_label()
+        self._capture_baseline()
         return errors
+
+    def _capture_baseline(self):
+        """Mark the current spin values as matching what is on disk."""
+        self._baseline = {arg: spin.value() for arg, spin in self._spins.items()}
+
+    def has_pending_changes(self) -> bool:
+        """True if a save field was edited but not yet written to the files."""
+        if not (self._slot2 or self._slot3 or self._slot4):
+            return False
+        return any(spin.value() != self._baseline.get(arg, spin.value())
+                   for arg, spin in self._spins.items())
 
     def _refresh_penalty_label(self):
         if self._slot4 is None:
@@ -1073,6 +1094,19 @@ class SaveEditorTab(QWidget):
         if not self._slot2 and not self._slot3 and not self._slot4:
             QMessageBox.warning(self, "Not loaded", "Read save files first.")
             return
+        if self._game_running_check is not None and self._game_running_check():
+            reply = QMessageBox.warning(
+                self, "Game is running",
+                "OP ETERNAL is still running.\n\n"
+                "It's recommended to close the game before writing saves, "
+                "otherwise the game may overwrite your changes when it next "
+                "saves or exits.\n\n"
+                "Write anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         errors = []
         for slot_num, slot_obj in ((2, self._slot2), (3, self._slot3), (4, self._slot4)):
             if slot_obj is None:
@@ -1092,6 +1126,7 @@ class SaveEditorTab(QWidget):
         if errors:
             QMessageBox.critical(self, "Write errors", "\n".join(errors))
         else:
+            self._capture_baseline()
             self.restore_staged.emit()
             QMessageBox.information(
                 self, "Saved",
@@ -1124,6 +1159,8 @@ class SaveEditorTab(QWidget):
             return False, str(e)
         if "penalty-rank" in self._spins:
             self._spins["penalty-rank"].setValue(0)
+            # The file now matches this spin; don't flag it as a pending edit.
+            self._baseline["penalty-rank"] = 0
         self._refresh_penalty_label()
         self.restore_staged.emit()
         return True, ""
@@ -1702,6 +1739,7 @@ class ACILauncher(QMainWindow):
         self._settings_tab.saved.connect(self._on_settings_saved)
         self._saves_tab.backup_tab.restore_staged.connect(lambda: setattr(self, "_restore_staged", True))
         self._saves_tab.editor_tab.restore_staged.connect(lambda: setattr(self, "_restore_staged", True))
+        self._saves_tab.editor_tab.set_game_running_check(self._rpcs3_proc.is_running)
 
     def _resolve_rpcn_host(self) -> str:
         mode = self._play_tab.get_rpcn_mode()
@@ -1712,6 +1750,22 @@ class ACILauncher(QMainWindow):
         return COMMUNITY_RPCN_HOST
 
     def _start_launch(self):
+        editor = self._saves_tab.editor_tab
+        if editor.has_pending_changes():
+            reply = QMessageBox.question(
+                self, "Unsaved save edits",
+                "You edited values in the save editor but have not pressed "
+                "\"Write to Files\" yet, so those changes are not staged.\n\n"
+                "Write them now before launching?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            if reply == QMessageBox.StandardButton.Yes:
+                editor._write_saves()
+
         issues = []
         if not FIRMWARE_INDICATOR.exists():
             issues.append("PS3 firmware is not installed.")
