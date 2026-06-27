@@ -1,35 +1,49 @@
 #!/usr/bin/env bash
 # Apply OEL source patches against the cloned upstream submodules.
+# The ordered patch list is SRC/PATCH/series -- the single source of truth.
+# Add, remove, reorder, or disable a patch by editing that file.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
+SERIES="$SRC/PATCH/series"
+
+[ -f "$SERIES" ] || { echo "ERROR: missing $SERIES" >&2; exit 1; }
 
 echo "============================================================"
 echo " ACI-RPCS3 -- Apply source patches"
 echo "============================================================"
 echo
 
-step() {
-    local idx="$1" repo="$2" patch="$3" label="$4"
-    echo "[$idx] Applying $label..."
-    if ! ( cd "$SRC/GIT/$repo" && git apply "$SRC/PATCH/$patch" ); then
+# Read the series into an ordered list of patch paths (relative to SRC/PATCH/).
+# Strip CR (the file can check out CRLF on a /mnt/c WSL mount), skip blank lines
+# and '#' comments, and keep only the first whitespace-delimited token (so a
+# trailing "# comment" after the path is ignored).
+patches=()
+while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    read -r tok _ <<<"$line"
+    case "$tok" in ''|\#*) continue ;; esac
+    patches+=("$tok")
+done < "$SERIES"
+
+total=${#patches[@]}
+[ "$total" -gt 0 ] || { echo "ERROR: no patches listed in $SERIES" >&2; exit 1; }
+
+idx=0
+for rel in "${patches[@]}"; do
+    idx=$((idx + 1))
+    # Target tree = first path component, lowercased (RPCS3 -> rpcs3, RPCN -> rpcn).
+    repo="${rel%%/*}"
+    repo="$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')"
+    echo "[$idx/$total] Applying $rel..."
+    if ! ( cd "$SRC/GIT/$repo" && git apply "$SRC/PATCH/$rel" ); then
         echo
-        echo "ERROR: $label failed."
+        echo "ERROR: failed to apply $rel."
         echo "Make sure SRC/GIT/$repo is a clean clone with no local modifications."
         exit 1
     fi
     echo "Done."
     echo
-}
-
-step "1/9" rpcs3 "RPCS3/tss-support.patch"       "RPCS3 TSS patch"
-step "2/9" rpcs3 "RPCS3/tree-transparency.patch"   "RPCS3 tree transparency patch"
-step "3/9" rpcs3 "RPCS3/np-localnetinfo-byteorder-fix.patch" "RPCS3 NP LocalNetInfo byte order fix patch"
-step "4/9" rpcs3 "RPCS3/p2ps-disconnect-fix.patch" "RPCS3 P2PS disconnect fix patch"
-step "5/9" rpcs3 "RPCS3/np-freeze-tracer.patch"  "RPCS3 freeze-tracer diagnostics patch"
-step "6/9" rpcs3 "RPCS3/lv2-cond-tracer.patch"  "RPCS3 lv2 cond-tracer diagnostics patch"
-step "7/9" rpcs3 "RPCS3/framelimit-lock.patch"          "RPCS3 frame limit lock patch (anticheat)"
-step "8/9" rpcs3 "RPCS3/rpcn-disconnect-fix.patch"    "RPCS3 RPCN disconnect fix patch"
-step "9/9" rpcn  "RPCN/tss-server.patch"             "RPCN TSS server patch"
+done
 
 cat <<'EOF'
 ============================================================

@@ -1,17 +1,11 @@
 # External patches
 
-This project carries nine patches against upstream source trees, applied by
-`SRC\apply-patches.bat`:
-
-- `SRC\PATCH\RPCS3\tss-support.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\tree-transparency.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\np-freeze-tracer.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\lv2-cond-tracer.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\framelimit-lock.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\rpcn-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCN\tss-server.patch` against [rpcn](https://github.com/RipleyTom/rpcn)
+This project carries patches against two upstream source trees,
+[RPCS3](https://github.com/RPCS3/rpcs3) and [rpcn](https://github.com/RipleyTom/rpcn).
+They are applied to the cloned trees by `SRC\apply-patches.bat` (Windows) or
+`SRC\apply-patches.sh` (Linux). Which patches apply, and in what order, is defined
+by one file: `SRC\PATCH\series`, the single source of truth every applier reads.
+The per-patch rationale follows below, keyed by filename.
 
 The kit modifies upstream because the game depends on
 two PSN features that aren't otherwise available in an offline or community-RPCN
