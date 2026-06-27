@@ -66,7 +66,7 @@ RPCS3_TSS   = PORTABLE_DIR / "tss"
 RPCN_TSS    = RPCN_DIR / "tss_data" / "NPWR04428_00"
 SETTINGS_FILE = APP_DIR / "settings.json"
 
-VERSION          = "1.0.2.3"
+VERSION          = "1.0.2.4"
 RELEASE_CHANNEL  = "experimental"   # "main" for stable releases, "experimental" for pre-releases
 GITHUB_REPO      = "The-OPERATIONS-Team/OPERATION-ETERNAL-LIBERATION"
 
