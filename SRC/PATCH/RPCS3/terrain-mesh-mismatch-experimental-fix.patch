@@ -1,0 +1,14 @@
+diff --git a/rpcs3/Emu/RSX/Program/GLSLCommon.cpp b/rpcs3/Emu/RSX/Program/GLSLCommon.cpp
+index 4c6d862..d98543a 100644
+--- a/rpcs3/Emu/RSX/Program/GLSLCommon.cpp
++++ b/rpcs3/Emu/RSX/Program/GLSLCommon.cpp
+@@ -572,7 +572,8 @@ namespace glsl
+ 		case FUNCTION::VERTEX_TEXTURE_FETCH1D:
+ 			return "textureLod($t, $0.x, 0)";
+ 		case FUNCTION::VERTEX_TEXTURE_FETCH2D:
+-			return "textureLod($t, $0.xy, 0)";
++			// Experimental: half-texel offset on vertex heightmap fetch to correct terrain mesh sampling misalignment.
++			return "textureLod($t, $0.xy + (vec2(0.5) / vec2(textureSize($t, 0))), 0)";
+ 		case FUNCTION::VERTEX_TEXTURE_FETCH3D:
+ 		case FUNCTION::VERTEX_TEXTURE_FETCHCUBE:
+ 			return "textureLod($t, $0.xyz, 0)";

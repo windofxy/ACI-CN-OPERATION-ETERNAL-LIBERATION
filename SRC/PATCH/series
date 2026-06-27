@@ -13,3 +13,7 @@ RPCS3/lv2-cond-tracer.patch                # lv2 cond-tracer diagnostics
 RPCS3/framelimit-lock.patch                # frame-limit lock (anticheat)
 RPCS3/rpcn-disconnect-fix.patch            # RPCN disconnect handling
 RPCN/tss-server.patch                      # TSS HTTP server + game-specific entries
+
+# Additional rendering fixes (appended)
+RPCS3/additional-tree-transparency-fixes.patch    # additional tree transparency fixes
+RPCS3/terrain-mesh-mismatch-experimental-fix.patch  # terrain mesh mismatch experimental fix
