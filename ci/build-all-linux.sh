@@ -72,6 +72,9 @@ mkdir -p "$ARTDIR_HOST"
 
 DOCKER_IMG="rpcs3/rpcs3-ci-jammy:1.13"
 docker pull --quiet "$DOCKER_IMG"
+# BUILD_REPOSITORY_NAME / BUILD_SOURCEBRANCHNAME are intentionally omitted below:
+# leaving them unset keeps RPCS3_GIT_FULL_BRANCH at "local_build", which suppresses
+# the experimental-build warning and the auto-update notification.
 docker run --rm \
     -v "$ROOT/SRC/GIT/rpcs3:/rpcs3" \
     -v "$CCACHE_DIR:/root/.ccache" \
@@ -82,8 +85,6 @@ docker run --rm \
     -e COMPILER=clang \
     -e DEPLOY_APPIMAGE=true \
     -e RUN_UNIT_TESTS=OFF \
-    -e BUILD_REPOSITORY_NAME=The-OPERATIONS-Team/OPERATION-ETERNAL-LIBERATION \
-    -e BUILD_SOURCEBRANCHNAME="$(git rev-parse --abbrev-ref HEAD)" \
     -e BUILD_PR_NUMBER= \
     -e BUILD_SOURCEVERSION="$(git rev-parse HEAD)" \
     -e BUILD_ARTIFACTSTAGINGDIRECTORY=/rpcs3-artifacts \
