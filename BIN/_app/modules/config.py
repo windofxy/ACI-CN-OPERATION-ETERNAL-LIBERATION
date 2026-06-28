@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import time
 
+from . import games
+
 
 def deploy_patches(rpcs3_dir: str, cfg_dir: str, patches_dir: str):
     patches_dest = os.path.join(rpcs3_dir, "portable", "patches")
@@ -59,7 +61,7 @@ def ensure_custom_config(
     Returns True on success, False if config.yml never appeared.
     """
     custom_dir = os.path.join(cfg_dir, "custom_configs")
-    cfg_path   = os.path.join(custom_dir, "config_NPUB31347.yml")
+    cfg_path   = os.path.join(custom_dir, games.ACTIVE.config_name)
     global_cfg = os.path.join(cfg_dir, "config.yml")
     os.makedirs(custom_dir, exist_ok=True)
 

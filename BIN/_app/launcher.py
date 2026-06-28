@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QFileDialog,
     QSpinBox, QFrame, QSizePolicy, QButtonGroup, QScrollArea,
+    QDialog, QDialogButtonBox, QStyle,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,10 @@ RPCS3_DIR   = APP_DIR / "RPCS3"
 RPCN_DIR    = APP_DIR / "rpcn"
 GAMESERVER_DIR = APP_DIR / "gameserver"
 PATCHES_DIR = APP_DIR / "patches"
+
+# Game-profile registry (used by the path constants).
+sys.path.insert(0, str(APP_DIR))
+from modules import games
 PYTHON_EXE  = APP_DIR / "python" / "python.exe" if _IS_WIN else APP_DIR / "python" / "bin" / "python3"
 
 
@@ -60,10 +65,10 @@ PORTABLE_DIR = RPCS3_DIR / "portable"
 # they sit directly in the portable dir (fs::get_config_dir).
 RPCS3_CFG_DIR = PORTABLE_DIR / "config" if _IS_WIN else PORTABLE_DIR
 RPCN_YML    = RPCS3_CFG_DIR / "rpcn.yml"
-CUSTOM_CFG  = RPCS3_CFG_DIR / "custom_configs" / "config_NPUB31347.yml"
+CUSTOM_CFG  = RPCS3_CFG_DIR / "custom_configs" / games.ACTIVE.config_name
 TSS_SRC_DIR = ROOT_DIR / "TSS"
 RPCS3_TSS   = PORTABLE_DIR / "tss"
-RPCN_TSS    = RPCN_DIR / "tss_data" / "NPWR04428_00"
+RPCN_TSS    = RPCN_DIR / "tss_data" / games.ACTIVE.comm_id
 SETTINGS_FILE = APP_DIR / "settings.json"
 
 VERSION          = "1.0.2.4"
@@ -75,8 +80,10 @@ OPERATIONS_GAME_ADDR = "oel-game.killerbyte.xyz:8000:8001"
 TELEMETRY_URL        = "https://oel-telemetry.killerbyte.xyz"
 
 FIRMWARE_INDICATOR = PORTABLE_DIR / "dev_flash" / "sys" / "external" / "libsre.sprx"
-GAME_INDICATOR     = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "PARAM.SFO"
-GAME_USRDIR        = PORTABLE_DIR / "dev_hdd0"  / "game"             / "NPUB31347" / "USRDIR"
+GAME_BASE_DIR      = PORTABLE_DIR / "dev_hdd0" / "game"
+GAME_INDICATOR     = GAME_BASE_DIR / games.ACTIVE.title_id / "PARAM.SFO"
+GAME_USRDIR        = GAME_BASE_DIR / games.ACTIVE.title_id / "USRDIR"
+GAME_MANIFEST      = APP_DIR / "data" / "game_manifest.json"
 
 
 def rpcs3_launch_args() -> list:
@@ -132,7 +139,7 @@ def privileged_port_help() -> str:
 # Modules live next to this file
 sys.path.insert(0, str(APP_DIR))
 from modules import ip_detect, config as cfg_mod, tss as tss_mod
-from modules import save_editor, tus_saves, processes, hash_util
+from modules import save_editor, tus_saves, processes, hash_util, game_verify
 from modules.telemetry import TelemetryStreamer
 from modules.updater import UpdateChecker
 
@@ -320,23 +327,121 @@ class TssDownloader(QObject):
         self._fetch_next()
 
 # ---------------------------------------------------------------------------
-# Game files checksum worker
+# Game-file verification
 # ---------------------------------------------------------------------------
 
-class ChecksumWorker(QThread):
-    """SHA-256 of every file under a tree, walked in sorted relative-path order."""
+class GameVerifyWorker(QThread):
+    """Per-file verification of the installed game against the manifest."""
 
-    done = Signal(str)
+    done = Signal(object)        # game_verify.VerifyResult
+    failed = Signal(str)
+    progress = Signal(int, int)  # (file number being hashed, total files)
 
-    def __init__(self, root: Path, parent=None):
+    def __init__(self, game_dir: Path, param_sfo: Path, entry: dict, parent=None):
         super().__init__(parent)
-        self._root = root
+        self._game_dir = game_dir
+        self._param = param_sfo
+        self._entry = entry
 
     def run(self):
         try:
-            self.done.emit(hash_util.hash_tree(self._root))
-        except OSError as e:
-            self.done.emit(f"error: {e}")
+            result = game_verify.verify(
+                self._game_dir, self._param, self._entry,
+                progress=lambda i, total, rel: self.progress.emit(i + 1, total),
+            )
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.done.emit(result)
+
+
+def _fmt_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} GB"
+
+
+_STATUS_LABEL = {
+    "ok": "OK",
+    "mismatch": "MISMATCH",
+    "missing": "MISSING",
+    "unexpected": "unexpected file",
+    "unconfigured": "not verified",
+    "error": "read error",
+}
+
+
+class GameVerifyDialog(QDialog):
+    """Detailed per-file hash / version / size report for the installed game."""
+
+    def __init__(self, result, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setWindowTitle("Game file verification")
+        self.resize(700, 460)
+        lay = QVBoxLayout(self)
+
+        title = result.title_id + (f" ({result.region})" if result.region else "")
+        lay.addWidget(QLabel(f"Game: {title}"))
+        found = ", ".join(f"{k} {v}" for k, v in result.version_found.items()) or "unknown"
+        ver_line = QLabel(f"Game version (PARAM.SFO): {found}   |   expected {result.version_expected}")
+        size_txt = _fmt_size(result.size_bytes)
+        if result.size_expected:
+            size_txt += f"   |   expected ~{_fmt_size(result.size_expected)}"
+        size_line = QLabel(f"Approximate game size: {size_txt}")
+        lay.addWidget(ver_line)
+        lay.addWidget(size_line)
+
+        warn_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+        mono = QFont()
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        mono.setFamily("monospace")
+
+        tree = QTreeWidget()
+        tree.setColumnCount(4)
+        tree.setHeaderLabels(["File", "Size", "SHA-256", "Status"])
+        tree.setRootIsDecorated(False)
+        tree.setAlternatingRowColors(True)
+        tree.setUniformRowHeights(True)
+        for fr in result.files:
+            item = QTreeWidgetItem([
+                fr.rel,
+                _fmt_size(fr.size) if fr.size else "",
+                fr.sha256,
+                _STATUS_LABEL.get(fr.status, fr.status),
+            ])
+            item.setFont(2, mono)
+            if fr.status in ("mismatch", "missing", "error"):
+                item.setIcon(3, warn_icon)
+            tree.addTopLevelItem(item)
+        tree.resizeColumnToContents(0)
+        tree.resizeColumnToContents(1)
+        lay.addWidget(tree, 1)
+
+        if result.ok:
+            summary = "All checks passed."
+        else:
+            summary = ("One or more checks failed. Reinstall the base game and every "
+                       "update, in order, then verify again.")
+        summary_line = QLabel(summary)
+        summary_line.setWordWrap(True)
+        if not result.ok:
+            sw = QLabel()
+            sw.setPixmap(warn_icon.pixmap(16, 16))
+            srow = QHBoxLayout()
+            srow.addWidget(sw)
+            srow.addWidget(summary_line, 1)
+            lay.addLayout(srow)
+        else:
+            lay.addWidget(summary_line)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+        lay.addWidget(btns)
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +454,11 @@ class PlayTab(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._rpcn_running = False
-        self._checksum_worker: ChecksumWorker | None = None
-        self._checksum_done = False
+        self._verify_worker: GameVerifyWorker | None = None
+        self._verify_result = None
+        self._verify_started = False
+        self._manifest = game_verify.load_manifest(GAME_MANIFEST)
+        self._unsupported_profile = None
         self._game_hash = ""
         self._relay_bind_checked = False
         self._build_ui()
@@ -496,16 +604,50 @@ class PlayTab(QWidget):
         self._game_hint = QLabel("Launch RPCS3, then: File > Install Packages/Raps")
         self._game_hint.setStyleSheet("color: gray; font-style: italic;")
         sg.addWidget(self._game_hint, 1, 2)
-        self._checksum_field = QLineEdit()
-        self._checksum_field.setReadOnly(True)
-        self._checksum_field.setPlaceholderText("calculating...")
-        mono = QFont()
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        mono.setFamily("monospace")
-        self._checksum_field.setFont(mono)
-        self._checksum_field.setCursorPosition(0)
-        sg.addWidget(self._checksum_field, 1, 2)
-        self._checksum_field.setVisible(False)
+
+        # Game-file verification controls.
+        self._verify_row = QWidget()
+        verify_layout = QHBoxLayout(self._verify_row)
+        verify_layout.setContentsMargins(0, 0, 0, 0)
+        self._verify_btn = QPushButton("Verify game files")
+        self._verify_warning = QLabel()
+        warn_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+        self._verify_warning.setPixmap(warn_icon.pixmap(16, 16))
+        self._verify_warning.setToolTip(
+            "Verification of at least one of your game files has failed. "
+            "You may encounter issues during gameplay. Make sure to have installed "
+            "your game and patches completely and in the correct order."
+        )
+        self._verify_warning.setVisible(False)
+        self._verify_ok = QLabel()
+        ok_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+        self._verify_ok.setPixmap(ok_icon.pixmap(16, 16))
+        self._verify_ok.setToolTip("All game files verified.")
+        self._verify_ok.setVisible(False)
+        self._verify_progress = QLabel("Checking...")
+        self._verify_progress.setVisible(False)
+        verify_layout.addWidget(self._verify_btn)
+        verify_layout.addWidget(self._verify_warning)
+        verify_layout.addWidget(self._verify_ok)
+        verify_layout.addWidget(self._verify_progress)
+        verify_layout.addStretch()
+        sg.addWidget(self._verify_row, 1, 2)
+        self._verify_row.setVisible(False)
+        self._verify_btn.clicked.connect(self._open_verify_dialog)
+
+        # Shown instead of the verify row when an unsupported edition (EU/JP) is detected.
+        self._unsupported_row = QWidget()
+        unsup_layout = QHBoxLayout(self._unsupported_row)
+        unsup_layout.setContentsMargins(0, 0, 0, 0)
+        unsup_icon = QLabel()
+        unsup_icon.setPixmap(warn_icon.pixmap(16, 16))
+        unsup_msg = QLabel("This game edition is not supported yet. "
+                           "Compatibility is planned in the future versions.")
+        unsup_msg.setWordWrap(True)
+        unsup_layout.addWidget(unsup_icon)
+        unsup_layout.addWidget(unsup_msg, 1)
+        sg.addWidget(self._unsupported_row, 1, 2)
+        self._unsupported_row.setVisible(False)
 
         sg.addWidget(QLabel("TSS files"), 2, 0)
         self._tss_label = QLabel()
@@ -538,7 +680,7 @@ class PlayTab(QWidget):
         f2.setBold(True)
         self._launch_btn.setFont(f2)
         self._launch_btn.setFixedHeight(44)
-        self._launch_btn.clicked.connect(self.launch_requested)
+        self._launch_btn.clicked.connect(self._on_launch_clicked)
         root.addWidget(self._launch_btn)
         self.refresh_setup_status()
 
@@ -563,7 +705,7 @@ class PlayTab(QWidget):
 
     def refresh_setup_status(self):
         fw_ok   = FIRMWARE_INDICATOR.exists()
-        game_ok = GAME_INDICATOR.exists()
+        profile = games.find_installed(GAME_BASE_DIR)
         n       = tss_mod.count_present(str(TSS_SRC_DIR))
         total   = len(tss_mod.TSS_FILES)
         tss_ok  = (n == total)
@@ -577,46 +719,109 @@ class PlayTab(QWidget):
             self._fw_status.setStyleSheet("color: red;")
             self._fw_hint.setVisible(True)
 
-        if game_ok:
-            self._game_status.setText("installed")
-            self._game_status.setStyleSheet("color: green;")
-            self._game_hint.setVisible(False)
-        else:
+        self._unsupported_profile = profile if (profile and not profile.supported) else None
+        if profile is None:
             self._game_status.setText("not installed")
             self._game_status.setStyleSheet("color: red;")
             self._game_hint.setVisible(True)
+            self._verify_row.setVisible(False)
+            self._unsupported_row.setVisible(False)
+        elif not profile.supported:
+            self._game_status.setText(f"{profile.region} edition not supported")
+            self._game_status.setStyleSheet("color: red;")
+            self._game_hint.setVisible(False)
+            self._verify_row.setVisible(False)
+            self._unsupported_row.setVisible(True)
+        else:
+            self._game_status.setText("installed")
+            self._game_status.setStyleSheet("color: green;")
+            self._game_hint.setVisible(False)
+            self._unsupported_row.setVisible(False)
+            self._refresh_verify_row(profile)
 
         self._tss_label.setText(f"{n} / {total} files")
         self._tss_label.setStyleSheet("color: green;" if tss_ok else "color: gray;")
         self._tss_hint.setVisible(not tss_ok)
 
-        self._refresh_checksum_row()
+    def _refresh_verify_row(self, profile):
+        self._verify_row.setVisible(True)
+        if not self._verify_started:
+            self._verify_started = True
+            game_dir = GAME_BASE_DIR / profile.title_id
+            entry = game_verify.game_entry(self._manifest, profile.title_id)
+            self._verify_progress.setText("Checking...")
+            self._verify_progress.setVisible(True)
+            self._verify_worker = GameVerifyWorker(game_dir, game_dir / "PARAM.SFO", entry, self)
+            self._verify_worker.progress.connect(self._on_verify_progress)
+            self._verify_worker.done.connect(self._on_verify_done)
+            self._verify_worker.failed.connect(self._on_verify_failed)
+            self._verify_worker.start()
 
-    def _refresh_checksum_row(self):
-        try:
-            usrdir_present = GAME_USRDIR.is_dir() and any(GAME_USRDIR.iterdir())
-        except OSError:
-            usrdir_present = False
+    def _on_verify_progress(self, current: int, total: int):
+        self._verify_progress.setText(f"Checking... {current}/{total}")
 
-        if not (GAME_INDICATOR.exists() and usrdir_present):
-            self._checksum_field.setVisible(False)
+    def _clear_verify_worker(self):
+        self._verify_progress.setVisible(False)
+        if self._verify_worker is not None:
+            self._verify_worker.deleteLater()
+            self._verify_worker = None
+
+    def _on_verify_done(self, result):
+        self._clear_verify_worker()
+        self._verify_result = result
+        self._game_hash = game_verify.fingerprint(result)
+        self._verify_warning.setVisible(not result.ok)
+        self._verify_ok.setVisible(result.ok)
+
+    def _on_verify_failed(self):
+        self._clear_verify_worker()
+
+    def _open_verify_dialog(self):
+        if self._verify_result is None:
+            QMessageBox.information(
+                self, "Verifying game files",
+                "Game files are still being verified. Please try again in a moment.")
             return
+        GameVerifyDialog(self._verify_result, self).exec()
 
-        self._checksum_field.setVisible(True)
-        if not self._checksum_done and self._checksum_worker is None:
-            self._checksum_worker = ChecksumWorker(GAME_USRDIR, self)
-            self._checksum_worker.done.connect(self._on_checksum_done)
-            self._checksum_worker.start()
-
-    def _on_checksum_done(self, digest: str):
-        self._checksum_field.setText(digest)
-        self._checksum_field.setToolTip(digest)
-        self._checksum_field.setCursorPosition(0)
-        self._checksum_done = True
-        self._game_hash = digest
-        if self._checksum_worker is not None:
-            self._checksum_worker.deleteLater()
-            self._checksum_worker = None
+    def _on_launch_clicked(self):
+        # Gate the launch on the detected edition and the verification result.
+        if self._unsupported_profile is not None:
+            answer = QMessageBox.warning(
+                self, "Game edition not supported",
+                "This game edition is not supported yet. Compatibility is planned "
+                "in the future versions.\n\nLaunch anyways?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self.launch_requested.emit()
+            return
+        result = self._verify_result
+        if result is None:
+            if self._verify_worker is not None:
+                answer = QMessageBox.question(
+                    self, "Verification not finished",
+                    "Game file verification hasn't finished yet. Launch anyways?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        elif not result.ok:
+            answer = QMessageBox.warning(
+                self, "Game files may be incomplete",
+                "Verification of at least one of your game files has failed. "
+                "You may encounter issues during gameplay. Make sure to have "
+                "installed your game and patches completely and in the correct "
+                "order.\n\nUse \"Verify game files\" for details. Launch anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.launch_requested.emit()
 
     def get_game_hash(self) -> str:
         return self._game_hash
@@ -625,7 +830,7 @@ class PlayTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Select folder containing TSS files")
         if not folder:
             return
-        files = glob.glob(os.path.join(folder, "NPWR04428_00-*.tss"))
+        files = glob.glob(os.path.join(folder, f"{games.ACTIVE.comm_id}-*.tss"))
         if not files:
             QMessageBox.warning(self, "No TSS files found",
                                 "No .tss files found in that folder.")
@@ -970,7 +1175,7 @@ class SaveEditorTab(QWidget):
         if saved and os.path.isdir(saved):
             self._set_save_dir(saved)
             return
-        npwr_root = PORTABLE_DIR / "tus" / "NPWR04428_00"
+        npwr_root = PORTABLE_DIR / "tus" / games.ACTIVE.comm_id
         try:
             npwr_root.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -995,7 +1200,7 @@ class SaveEditorTab(QWidget):
             save_settings(settings)
 
     def _browse_saves(self):
-        npwr_root = PORTABLE_DIR / "tus" / "NPWR04428_00"
+        npwr_root = PORTABLE_DIR / "tus" / games.ACTIVE.comm_id
         try:
             npwr_root.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -1483,7 +1688,7 @@ class TssTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Select folder containing TSS files")
         if not folder:
             return
-        files = glob.glob(os.path.join(folder, "NPWR04428_00-*.tss"))
+        files = glob.glob(os.path.join(folder, f"{games.ACTIVE.comm_id}-*.tss"))
         if not files:
             QMessageBox.warning(self, "No TSS files found",
                                 "No .tss files found in that folder.")
