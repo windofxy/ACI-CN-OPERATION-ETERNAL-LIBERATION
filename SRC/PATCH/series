@@ -10,7 +10,6 @@ RPCS3/np-localnetinfo-byteorder-fix.patch  # NP LocalNetInfo byte-order fix
 RPCS3/p2ps-disconnect-fix.patch            # consolidated P2PS disconnect overhaul
 RPCS3/np-freeze-tracer.patch               # freeze-tracer diagnostics
 RPCS3/lv2-cond-tracer.patch                # lv2 cond-tracer diagnostics
-RPCS3/framelimit-lock.patch                # frame-limit lock (anticheat)
 RPCS3/rpcn-disconnect-fix.patch            # RPCN disconnect handling
 RPCN/tss-server.patch                      # TSS HTTP server + game-specific entries
 
