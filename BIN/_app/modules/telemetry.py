@@ -226,8 +226,8 @@ class TelemetryStreamer(threading.Thread):
             return
 
         # Hash rpcs3 exe off the UI thread; result goes in headers.
-        # game_hash is pre-computed by ChecksumWorker at launcher init and
-        # passed in via metadata — no need to re-hash the 8 GB tree here.
+        # game_hash is pre-computed by the game-file verification at launcher
+        # init and passed in via metadata.
         try:
             rpcs3_exe = self._meta.get("rpcs3_exe")
             if rpcs3_exe and Path(rpcs3_exe).is_file():

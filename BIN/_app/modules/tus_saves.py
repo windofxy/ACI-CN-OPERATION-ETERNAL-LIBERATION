@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import games
+
 
 @dataclass
 class BackupEntry:
@@ -74,7 +76,7 @@ def stage_restore(entry: BackupEntry) -> str | None:
         return str(e)
 
 
-COMM_ID = "NPWR04428_00"
+COMM_ID = games.ACTIVE.comm_id
 
 DEFAULT_NEW_GAME_SLOTS = (
     "00000000000000000002",

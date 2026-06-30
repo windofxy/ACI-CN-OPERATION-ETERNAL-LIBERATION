@@ -10,10 +10,9 @@
 # build, the LLVM libs, and the nuget restore that this script reuses). After
 # that, dispatch this script instead for a ~minute turnaround on a C++ edit.
 #
-# It does NOT carry its own patch list: the RPCS3 patch sequence is parsed out
-# of build-all.ps1 so that file stays the single source of truth (CLAUDE.md's
-# "keep all patch-list call-sites synced" rule). Adding a patch to build-all.ps1
-# automatically propagates here.
+# It does NOT carry its own patch list: the RPCS3 patch sequence comes from
+# SRC\PATCH\series (the single source of truth) via ci\patch-series.ps1, the
+# same reader build-all.ps1 uses. Adding a patch to the series propagates here.
 
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
@@ -53,13 +52,11 @@ $rc = $LASTEXITCODE
 Pop-Location
 if ($rc -ne 0) { throw "git reset to $Rpcs3Commit failed" }
 
-# 2. Apply the RPCS3 patch list parsed from build-all.ps1 (single source of truth).
+# 2. Apply the RPCS3 patch list from SRC\PATCH\series.
 Step "Apply RPCS3 patches"
-$buildAll = Get-Content (Join-Path $PSScriptRoot "build-all.ps1")
-$rpcs3Patches = foreach ($line in $buildAll) {
-    if ($line -match 'Apply-Patch\s+"SRC\\GIT\\rpcs3".*PATCH\\RPCS3\\([^"\\]+\.patch)') { $matches[1] }
-}
-if (-not $rpcs3Patches) { throw "Could not parse any RPCS3 patch from build-all.ps1" }
+. "$PSScriptRoot\patch-series.ps1"
+$rpcs3Patches = @((Get-PatchSeries -RepoRoot $RepoRoot -RepoFilter 'rpcs3').Leaf)
+if (-not $rpcs3Patches) { throw "No RPCS3 patches found in SRC\PATCH\series" }
 
 # A patch that creates a file leaves it behind as untracked on the next run (the reset above
 # deliberately skips `git clean`), and re-applying the creating patch then fails on

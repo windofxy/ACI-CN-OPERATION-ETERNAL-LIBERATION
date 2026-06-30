@@ -1,0 +1,28 @@
+{
+  "games": {
+    "NPUB31347": {
+      "region": "US",
+      "game_version": "2.11",
+      "approx_size_bytes": 8577489090,
+      "files": {
+        "USRDIR/DATA00.PAC": "29f03ed103932b522b9363bb3e0a5f1a57d4f1065b9a46dac8b7932c0d3eff4f",
+        "USRDIR/DATA01.PAC": "fa3a649ebf2063d4be3098b936bc75b0c697d92cd8768f31e3881cd4fa8838bc",
+        "USRDIR/DATA90.PAC": "825f5e48bf87e037ea7920d964365d927af8eb320db6c1dca88da0ff87e39ea7",
+        "USRDIR/DATA91.PAC": "af7dfedea970f8cc87bf61c4fcda484da8dd71cc33063e47374cf2b10132dfd9",
+        "USRDIR/DATA92.PAC": "742a4d579de9e120dc285b93dea3b75a3e0543f77570743bba3a13340c852d9c",
+        "USRDIR/DATA93.PAC": "d3fb61f5f34bec4e0a8ece3c63225f9305b04871bf8e796b1a9c2ea35434f9d6",
+        "USRDIR/DATA94.PAC": "f1966d72591cb8d9683ab60fefdf320919390e8ec024f49d88b4e27c3e7c33b3",
+        "USRDIR/DATA99.PAC": "75325bb68792f0713fa61b43329db73998554569be9dbab2c44feff853fe6f0b",
+        "USRDIR/EBOOT.BIN": "79e88350262125b0d44a279dee55f2e4e69edcf183b49487fc57fd403979c8cb",
+        "USRDIR/target/ACEARENA.edat": "57c7b23558ebc35936a6f2e82359ebc94d6e108acfa13a3576bca15f3101cbc2",
+        "USRDIR/target/DATA10.PAC": "e6919bd87a3247c808feaa062da44e4f68fdb20bca992412259132341409df65",
+        "USRDIR/target/DATA11.PAC": "fb6cfb1dc1d5ed3e1700f134278fa0ea7276fef966112079e763b3298e75c337",
+        "USRDIR/target/DATA12.PAC": "08f0e3acfa1d10e56faa15f03b1e4fc49d1bd90b520ce72491b4ab03f5243f28",
+        "USRDIR/target/DATA13.PAC": "093cae76b5403d642944b1076faf2f1d6bb317d52dbae6e1056191f1bed7fa70",
+        "USRDIR/target/DATA14.PAC": "2f43d7b6e5ada42492e1f8bbb5b0c13d3bdf90e6b30b8dfce6ebf148ef304500",
+        "USRDIR/target/DATA20.PAC": "0c492c3d78f85eac2110bf48fa1812593ff906fedcc0bb2fe19af794f7626c58",
+        "USRDIR/target/DATA21.PAC": "1c85045f893092f53b5cc53f019d4cda0188f655a503ba63aad2443992ad90af"
+      }
+    }
+  }
+}

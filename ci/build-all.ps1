@@ -69,16 +69,12 @@ Step "Sync submodules"
 Sync-Submodule "SRC\GIT\rpcs3" $Rpcs3Url $Rpcs3Commit
 Sync-Submodule "SRC\GIT\rpcn"  $RpcnUrl  $RpcnCommit
 
-# 2. Apply patches
+# 2. Apply patches (ordered list from SRC\PATCH\series)
 Step "Apply patches"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\tss-support.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\tree-transparency.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\np-freeze-tracer.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\lv2-cond-tracer.patch"
-Apply-Patch "SRC\GIT\rpcs3" "$RepoRoot\SRC\PATCH\RPCS3\rpcn-disconnect-fix.patch"
-Apply-Patch "SRC\GIT\rpcn"  "$RepoRoot\SRC\PATCH\RPCN\tss-server.patch"
+. "$PSScriptRoot\patch-series.ps1"
+foreach ($p in Get-PatchSeries -RepoRoot $RepoRoot) {
+    Apply-Patch "SRC\GIT\$($p.Repo)" $p.FullPath
+}
 
 # 3. Prebuilt LLVM libs
 Step "Fetch prebuilt LLVM"

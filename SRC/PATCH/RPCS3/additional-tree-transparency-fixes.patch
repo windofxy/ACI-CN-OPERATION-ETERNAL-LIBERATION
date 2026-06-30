@@ -1,0 +1,23 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKDraw.cpp b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+index 8a67892..350794f 100644
+--- a/rpcs3/Emu/RSX/VK/VKDraw.cpp
++++ b/rpcs3/Emu/RSX/VK/VKDraw.cpp
+@@ -489,6 +489,18 @@ void VKGSRender::load_texture_env()
+ 				min_lod = std::min(min_lod, actual_mipmaps - 1.f);
+ 				max_lod = std::min(max_lod, actual_mipmaps - 1.f);
+ 
++				// [ACI-FOLIAGE-FIX] Gather-assembled atlases (e.g. ACI dynamic tree impostors) build their upper mips by
++				// copying from separate small render-target surfaces whose GPU content is not reliably resident at sample
++				// time, producing black upper mips that distant billboards sample (max_lod up to 12) -> black foliage.
++				// Clamp such textures to mip 0 only. Normal CPU-uploaded textures (buildings, terrain) do not go through
++				// mipmap_gather and are therefore unaffected by this clamp.
++				if (sampler_state->external_subresource_desc.op == rsx::deferred_request_command::mipmap_gather)
++				{
++					min_lod = 0.f;
++					max_lod = 0.f;
++					min_filter.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
++				}
++
+ 				if (min_filter.mipmap_mode == VK_SAMPLER_MIPMAP_MODE_NEAREST)
+ 				{
+ 					// Round to nearest 0.5 to work around some broken games

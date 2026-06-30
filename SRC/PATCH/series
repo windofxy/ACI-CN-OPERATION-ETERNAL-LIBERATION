@@ -1,0 +1,19 @@
+# OEL patch series. Single source of truth for what gets applied and in what
+# order. Path is relative to SRC/PATCH/; the first component selects the target
+# tree (RPCS3/ -> SRC/GIT/rpcs3, RPCN/ -> SRC/GIT/rpcn). Blank lines and lines
+# starting with '#' are ignored; text after the patch path is a free comment.
+# Add, remove, reorder, or disable a patch by editing this one file.
+
+RPCS3/tss-support.patch                    # TSS/TUS serving, world-list padding, auto-backup
+RPCS3/tree-transparency.patch              # tree-list transparency
+RPCS3/np-localnetinfo-byteorder-fix.patch  # NP LocalNetInfo byte-order fix
+RPCS3/p2ps-disconnect-fix.patch            # consolidated P2PS disconnect overhaul
+RPCS3/np-freeze-tracer.patch               # freeze-tracer diagnostics
+RPCS3/lv2-cond-tracer.patch                # lv2 cond-tracer diagnostics
+RPCS3/framelimit-lock.patch                # frame-limit lock (anticheat)
+RPCS3/rpcn-disconnect-fix.patch            # RPCN disconnect handling
+RPCN/tss-server.patch                      # TSS HTTP server + game-specific entries
+
+# Additional rendering fixes (appended)
+RPCS3/additional-tree-transparency-fixes.patch    # additional tree transparency fixes
+RPCS3/terrain-mesh-mismatch-experimental-fix.patch  # terrain mesh mismatch experimental fix

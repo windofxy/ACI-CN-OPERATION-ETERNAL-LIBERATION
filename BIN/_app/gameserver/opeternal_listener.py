@@ -172,6 +172,8 @@ def _looks_like_tls_client_hello(sock):
         first = sock.recv(1, socket.MSG_PEEK)
     except (BlockingIOError, InterruptedError):
         return True
+    except socket.timeout:
+        raise
     except OSError:
         return False
     return bool(first and first[0] == 0x16)
@@ -288,8 +290,16 @@ def _parse_body(headers, body):
 
 # --- HTTP server ---
 
+# Bound the TLS sniff/handshake and per-request reads. A stalled or half-open
+# client (typically a port scanner) must never wedge the single accept thread
+# or tie up a worker thread forever.
+HANDSHAKE_TIMEOUT = 10
+REQUEST_TIMEOUT = 30
+
+
 class ACIHandler(http.server.BaseHTTPRequestHandler):
     server_version = "ACIMock/2.0"
+    timeout = REQUEST_TIMEOUT
 
     def log_message(self, fmt, *args):
         return
@@ -357,6 +367,7 @@ class ACIHandler(http.server.BaseHTTPRequestHandler):
 class ThreadingHTTPServer(ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 128
 
     def handle_error(self, request, client_address):
         log(f"[server] error for {client_address}:\n{traceback.format_exc()}")
@@ -371,7 +382,19 @@ class Port443Server(ThreadingHTTPServer):
 
     def get_request(self):
         sock, addr = self.socket.accept()
-        if not _looks_like_tls_client_hello(sock):
+        # A stalled or half-open client must never wedge this single accept
+        # thread, so bound the TLS sniff and handshake with a timeout. A timeout
+        # raises OSError, which socketserver treats as a dropped connection and
+        # keeps accepting. The worker gets a blocking socket back (the handler
+        # re-applies its own REQUEST_TIMEOUT).
+        sock.settimeout(HANDSHAKE_TIMEOUT)
+        try:
+            is_tls = _looks_like_tls_client_hello(sock)
+        except OSError:
+            sock.close()
+            raise
+        if not is_tls:
+            sock.settimeout(None)
             return sock, addr
         try:
             tls = self._ctx.wrap_socket(sock, server_side=True)
@@ -382,6 +405,7 @@ class Port443Server(ThreadingHTTPServer):
             except Exception:
                 pass
             raise
+        tls.settimeout(None)
         return tls, addr
 
 

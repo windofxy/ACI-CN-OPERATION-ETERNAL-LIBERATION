@@ -50,30 +50,14 @@ sync_submodule() {
     fi
 }
 
-apply_patch() {
-    local repo="$1" patch="$2"
-    echo "Applying $(basename "$patch") to $repo..."
-    ( cd "$repo" && git apply "$patch" )
-    echo "  OK"
-}
-
 # 1. Sync submodules
 step "Sync submodules"
 sync_submodule "SRC/GIT/rpcs3" "$RPCS3_URL" "$RPCS3_COMMIT"
 sync_submodule "SRC/GIT/rpcn"  "$RPCN_URL"  "$RPCN_COMMIT"
 
-# 2. Apply patches
+# 2. Apply patches (ordered list from SRC/PATCH/series)
 step "Apply patches"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/tss-support.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/tree-transparency.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/np-signaling-conninfo-disconnect.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/np-disconnect-handling.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/p2ps-disconnect-diagnostics.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/rpcn-roomdata-notfound-fix.patch"
-apply_patch "SRC/GIT/rpcs3" "$REPO_ROOT/SRC/PATCH/RPCS3/rpcn-reconnect.patch"
-apply_patch "SRC/GIT/rpcn"  "$REPO_ROOT/SRC/PATCH/RPCN/tss-server.patch"
+bash "$REPO_ROOT/SRC/apply-patches.sh"
 
 # 3. Build RPCS3 via cmake + ninja
 step "Build RPCS3"

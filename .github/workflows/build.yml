@@ -53,8 +53,9 @@ jobs:
       RELEASE_MESSAGE: /rpcs3/GitHubReleaseMessage.txt
       COMPILER: clang
       RUN_UNIT_TESTS: 'OFF'
-      BUILD_REPOSITORY_NAME:  ${{ github.repository }}
-      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      # BUILD_REPOSITORY_NAME / BUILD_SOURCEBRANCHNAME intentionally unset: leaving them
+      # empty keeps RPCS3_GIT_FULL_BRANCH at "local_build", which suppresses the
+      # experimental-build warning and the auto-update notification.
       BUILD_PR_NUMBER:        ${{ github.event.pull_request.number }}
       BUILD_SOURCEVERSION:    ${{ github.sha }}
       BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts
@@ -85,17 +86,10 @@ jobs:
       - name: Clone & patch upstream
         run: |
           git clone "$RPCS3_URL" SRC/GIT/rpcs3
-          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tree-transparency.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-freeze-tracer.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/lv2-cond-tracer.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-disconnect-fix.patch" )
+          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" )
           git clone "$RPCN_URL" SRC/GIT/rpcn
-          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
+          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" )
+          bash SRC/apply-patches.sh
 
       # Keyed on rpcs3 commit so a pin bump invalidates the cache cleanly.
       # github.run_id makes the primary key unique per run; restore-keys do the
@@ -123,7 +117,6 @@ jobs:
             -v "$BUILD_ARTIFACTSTAGINGDIRECTORY:$ARTDIR" \
             -e APPDIR -e ARTDIR -e RELEASE_MESSAGE \
             -e COMPILER -e DEPLOY_APPIMAGE -e RUN_UNIT_TESTS \
-            -e BUILD_REPOSITORY_NAME -e BUILD_SOURCEBRANCHNAME \
             -e BUILD_PR_NUMBER -e BUILD_SOURCEVERSION \
             -e BUILD_ARTIFACTSTAGINGDIRECTORY="$ARTDIR" \
             "$DOCKER_IMG" \
@@ -216,9 +209,10 @@ jobs:
       CCACHE_DIR:         'C:\ccache'
       CCACHE_INODECACHE:  'true'
       CCACHE_SLOPPINESS:  'time_macros'
-      DEPS_CACHE_DIR:     ./dependency_cache
-      BUILD_REPOSITORY_NAME:  ${{ github.repository }}
-      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      DEPS_CACHE_DIR:     dependency_cache
+      # BUILD_REPOSITORY_NAME / BUILD_SOURCEBRANCHNAME intentionally unset: leaving them
+      # empty keeps RPCS3_GIT_FULL_BRANCH at "local_build", which suppresses the
+      # experimental-build warning and the auto-update notification.
       BUILD_PR_NUMBER:        ${{ github.event.pull_request.number }}
       BUILD_SOURCEVERSION:    ${{ github.sha }}
       BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts
@@ -244,17 +238,10 @@ jobs:
       - name: Clone & patch upstream
         run: |
           git clone "$RPCS3_URL" SRC/GIT/rpcs3
-          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tss-support.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/tree-transparency.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-localnetinfo-byteorder-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/p2ps-disconnect-fix.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/np-freeze-tracer.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/lv2-cond-tracer.patch" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCS3/rpcn-disconnect-fix.patch" )
+          ( cd SRC/GIT/rpcs3 && git checkout "$RPCS3_COMMIT" )
           git clone "$RPCN_URL" SRC/GIT/rpcn
-          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" \
-              && git apply "$GITHUB_WORKSPACE/SRC/PATCH/RPCN/tss-server.patch" )
+          ( cd SRC/GIT/rpcn && git checkout "$RPCN_COMMIT" )
+          bash SRC/apply-patches.sh
 
       - name: Setup NuGet
         uses: nuget/setup-nuget@v4

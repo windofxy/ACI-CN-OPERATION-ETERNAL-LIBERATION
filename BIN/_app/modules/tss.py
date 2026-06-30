@@ -2,7 +2,9 @@
 import os
 import shutil
 
-TSS_FILES = [f"NPWR04428_00-{i}.tss" for i in range(15)]
+from . import games
+
+TSS_FILES = [f"{games.ACTIVE.comm_id}-{i}.tss" for i in range(15)]
 
 
 def count_present(tss_dir: str) -> int:

@@ -2,14 +2,14 @@
 ; Bump AppVersion for each release. Do not change AppId after first release.
 
 #define AppName    "OPERATION ETERNAL LIBERATION"
-#define AppVersion "1.0.2.3"
+#define AppVersion "1.0.2.4"
 
 [Setup]
 AppId={{3D7F2C1A-B8E4-4F2D-9C5E-1A2B3C4D5E6F}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-DefaultDirName={src}\OPERATION ETERNAL LIBERATION
+DefaultDirName={sd}\Games\OPETERNAL
 DisableProgramGroupPage=yes
 DisableDirPage=no
 OutputDir=.

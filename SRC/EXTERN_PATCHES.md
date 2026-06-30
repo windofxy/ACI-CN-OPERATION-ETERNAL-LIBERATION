@@ -1,17 +1,11 @@
 # External patches
 
-This project carries nine patches against upstream source trees, applied by
-`SRC\apply-patches.bat`:
-
-- `SRC\PATCH\RPCS3\tss-support.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\tree-transparency.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\np-localnetinfo-byteorder-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\p2ps-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\np-freeze-tracer.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\lv2-cond-tracer.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\framelimit-lock.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCS3\rpcn-disconnect-fix.patch` against [RPCS3](https://github.com/RPCS3/rpcs3)
-- `SRC\PATCH\RPCN\tss-server.patch` against [rpcn](https://github.com/RipleyTom/rpcn)
+This project carries patches against two upstream source trees,
+[RPCS3](https://github.com/RPCS3/rpcs3) and [rpcn](https://github.com/RipleyTom/rpcn).
+They are applied to the cloned trees by `SRC\apply-patches.bat` (Windows) or
+`SRC\apply-patches.sh` (Linux). Which patches apply, and in what order, is defined
+by one file: `SRC\PATCH\series`, the single source of truth every applier reads.
+The per-patch rationale follows below, keyed by filename.
 
 The kit modifies upstream because the game depends on
 two PSN features that aren't otherwise available in an offline or community-RPCN
@@ -206,13 +200,13 @@ What it changes:
 - The room cache drops a departed member correctly, so a left player no longer
   lingers as an empty occupied slot.
 
-The lobby-wide freeze this closes was a lock-order deadlock: the signaling
-handler used to run its guest callbacks and send its packets while holding its
-state lock, so a peer teardown could hold that lock across a callback or a socket
-send and cross with a concurrent socket operation taking the same locks the other
-way. The handler now records those callbacks and packets while the lock is held
-and runs them after releasing it, and the timeout monitor hands the disconnect to
-the signaling thread rather than reaching into that lock itself, so neither side
+An earlier attempt at this disconnect handling introduced a lock-order deadlock:
+callbacks and packets were dispatched while the signaling handler held its state
+lock, so a peer teardown could cross with a concurrent socket operation taking
+the same locks the other way. This patch handles the disconnect in a thread-safe
+manner: the handler records callbacks and packets while the lock is held and runs
+them after releasing it, and the timeout monitor hands the disconnect to the
+signaling thread rather than reaching into that lock itself, so neither side
 holds one domain's lock while taking the other's.
 
 ## RPCS3: `np-freeze-tracer.patch`

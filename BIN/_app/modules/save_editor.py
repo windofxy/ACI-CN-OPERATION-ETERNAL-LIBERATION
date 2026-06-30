@@ -32,33 +32,33 @@ SLOTS = {
     4: dict(file_size=0x0078,  entry_count=3,  data_zone=0x003C),
 }
 
+# The maximum value is set to 999999000 (and not 999999999) because if, either due to a game bonus event or any other
+# cause, the current value would go above 999999999, then either the game's save validation system will not allow the
+# save data to be loaded until next game restart.
+# As a result we keep the maximum value lower to reduce the possibility of this happening.
 FIELDS = [
     dict(slot=3, arg="credits",           label="Credits",
-         offset=0x4848, fmt="u32", max=0x7FFFFFFF, copies=[0x484C, 0x4854]),
-    dict(slot=3, arg="ns-upgrade-lv56",   label="Nonstandard Upgrade Form (Lv.5>6)",
-         offset=0x136F0, fmt="u32", max=0x7FFFFFFF),
-    dict(slot=3, arg="sp-lv-cap-forms",   label="Special Aircraft Lv. Cap Forms",
-         offset=0x169A9, fmt="u32", max=0x7FFFFFFF),
+         offset=0x4848, fmt="u32", max=999999000, copies=[0x484C, 0x4854]),
 
-    dict(slot=2, arg="tickets",            label="Special Supply Tickets",
-         offset=0x0164, fmt="u32", max=0x7FFFFFFF),
     dict(slot=2, arg="fuel",               label="Stocked Fuel",
-         offset=0x0074, fmt="u32", max=0x7FFFFFFF),
-    dict(slot=2, arg="ns-upgrade-forms",  label="Nonstandard Upgrade Forms",
-         offset=0x008C, fmt="u32", max=0x7FFFFFFF),
-    dict(slot=2, arg="lv-cap-forms",      label="Lv. Cap Increase Forms",
-         offset=0x00BC, fmt="u32", max=0x7FFFFFFF),
+         offset=0x0074, fmt="u32", max=999999000),
     dict(slot=2, arg="aircraft-research", label="Aircraft Research Reports",
-         offset=0x00EC, fmt="u32", max=0x7FFFFFFF),
+         offset=0x00EC, fmt="u32", max=999999000),
     dict(slot=2, arg="sw-research", label="Special Weapons Research Reports",
-         offset=0x0104, fmt="u32", max=0x7FFFFFFF),
+         offset=0x0104, fmt="u32", max=999999000),
     dict(slot=2, arg="parts-research",   label="Parts Research Reports",
-         offset=0x011C, fmt="u32", max=0x7FFFFFFF),
+         offset=0x011C, fmt="u32", max=999999000),
+    dict(slot=2, arg="tickets",            label="Special Supply Tickets",
+         offset=0x0164, fmt="u32", max=999999000),
+    dict(slot=2, arg="ns-upgrade-forms",  label="Nonstandard Upgrade Forms",
+         offset=0x008C, fmt="u32", max=999999000),
+    dict(slot=2, arg="lv-cap-forms",      label="Lv. Cap Increase Forms",
+         offset=0x00BC, fmt="u32", max=999999000),
     dict(slot=2, arg="pilot-medals",      label="Skilled Pilot Medals",
-         offset=0x0254, fmt="u32", max=0x7FFFFFFF),
+         offset=0x0254, fmt="u32", max=999999000),
 
     dict(slot=4, arg="penalty-rank",      label="Penalty Rank",
-         offset=0x0040, fmt="u32", max=0x7FFFFFFF),
+         offset=0x0040, fmt="u32", max=999999000),
 ]
 
 FIELDS_BY_SLOT = {s: [f for f in FIELDS if f["slot"] == s] for s in (2, 3, 4)}

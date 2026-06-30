@@ -12,8 +12,8 @@ This repository contains original code authored by The -OPERATIONS- Team alongsi
 | `SRC/clone-git-repos.*`, `SRC/apply-patches.*`, `SRC/reset-git-repos.*`, `SRC/pinned-commits.env`, `SRC/README.md`, `SRC/EXTERN_PATCHES.md` | AGPL-3.0-or-later, with RPCS3 compatibility exception | Original code and documentation. |
 | `SRC/PATCH/RPCS3/*.patch` | GPL-2.0-only | Derivative of RPCS3 sources. Matches the upstream RPCS3 license. |
 | `SRC/PATCH/RPCN/*.patch` | AGPL-3.0-or-later | Derivative of RPCN sources. Matches the upstream RPCN license. |
-| `SRC/GIT/rpcs3/` (submodule) | GPL-2.0-only | Upstream [RPCS3](https://github.com/RPCS3/rpcs3). See that repository's `LICENSE`. |
-| `SRC/GIT/rpcn/` (submodule) | AGPL-3.0-or-later | Upstream [RPCN](https://github.com/RipleyTom/rpcn). See that repository's `LICENSE`. |
+| `SRC/GIT/rpcs3/` (cloned by `clone-git-repos` scripts) | GPL-2.0-only | Upstream [RPCS3](https://github.com/RPCS3/rpcs3). See that repository's `LICENSE`. |
+| `SRC/GIT/rpcn/` (cloned by `clone-git-repos` scripts) | AGPL-3.0-or-later | Upstream [RPCN](https://github.com/RipleyTom/rpcn). See that repository's `LICENSE`. |
 | `README.md`, `LICENSE`, `LICENSING.md` | AGPL-3.0-or-later, with RPCS3 compatibility exception | Documentation. |
 
 ## RPCS3 compatibility exception
